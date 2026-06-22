@@ -1,4 +1,3 @@
-
 const API = 'api/library_handler.php';
 const DATE_FORMAT = new Intl.DateTimeFormat('en-PH', { year: 'numeric', month: 'short', day: '2-digit' });
 
@@ -15,8 +14,43 @@ const byId = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const fileUrl = path => {
     const clean = String(path || '').replace(/^\.\//, '').replace(/^\.\.\//, '');
+    // Files are served only through the authenticated endpoint (storage/ is
+    // denied direct web access). Falls back to the raw path for anything that
+    // isn't under storage/ (e.g. static assets).
+    if (clean.startsWith('storage/')) return 'api/library_handler.php?action=file_serve&ref=' + encodeURIComponent(clean);
     return escapeHtml(clean);
 };
+
+function libApi(action, payload) {
+    const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    if (!payload) {
+        return fetch(`api/library_handler.php?action=${encodeURIComponent(action)}`, { credentials: 'same-origin' })
+            .then(r => r.json()).catch(() => ({ success: false }));
+    }
+    const params = new URLSearchParams();
+    params.append('action', action);
+    (function flatten(obj, prefix) {
+        Object.entries(obj).forEach(([key, val]) => {
+            const k = prefix ? `${prefix}[${key}]` : key;
+            if (Array.isArray(val)) {
+                val.forEach((item, i) => {
+                    if (item !== null && typeof item === 'object') flatten(item, `${k}[${i}]`);
+                    else params.append(`${k}[${i}]`, String(item ?? ''));
+                });
+            } else if (val !== null && typeof val === 'object') {
+                flatten(val, k);
+            } else {
+                params.append(k, String(val ?? ''));
+            }
+        });
+    })(payload, '');
+    return fetch('api/library_handler.php', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': token },
+        body: params
+    }).then(r => r.json()).catch(() => ({ success: false }));
+}
+window.libApi = libApi;
 
 function showToast(message, type = 'success') {
     const container = byId('toast-container');
@@ -58,7 +92,8 @@ async function requestJson(url, options = {}) {
 
 function modal(id) {
     const element = byId(id);
-    return element ? bootstrap.Modal.getOrCreateInstance(element) : null;
+    if (!element || typeof bootstrap === 'undefined') return null;
+    return bootstrap.Modal.getOrCreateInstance(element);
 }
 
 function switchTab(event) {
@@ -72,7 +107,18 @@ function switchTab(event) {
     if (tab === 'dashboard') renderDashboard();
     else if (tab === 'borrow-history') renderBorrowHistory();
     else if (tab === 'trash') loadTrash();
-    else renderTable();
+    else if (tab === 'books') loadBooks();
+    else if (tab === 'borrowing') loadBookBorrowRequests();
+    else if (tab === 'reservations') { if (typeof loadReservations === 'function') loadReservations(); }
+    else if (tab === 'members') { if (typeof loadBorrowers === 'function') loadBorrowers(); }
+    else if (tab === 'audit-logs') { if (typeof loadAuditLogs === 'function') loadAuditLogs(); }
+    else if (tab === 'documents' || tab === 'archive') renderTable();
+
+    document.dispatchEvent(new CustomEvent('tabChanged', { detail: tab }));
+
+    // Reset the content scroll position so each tab opens at the top
+    const mc = byId('mainContent');
+    if (mc) mc.scrollTop = 0;
 
     const mobileMenu = byId('mobileSidebarMenu');
     if (mobileMenu?.classList.contains('show')) bootstrap.Collapse.getOrCreateInstance(mobileMenu).hide();
@@ -868,10 +914,12 @@ async function loadBooks() {
         .then(r => r.json()).catch(() => ({ success: false }));
     if (!body.success) return;
     allBooks = body.data || [];
+    window.allBooks = allBooks;            // shared with the inventory module
     renderBooksTable();
     populateSubjectFilter();
     renderBooksMainTable();
     populateSubjectFilterMain();
+    if (typeof renderInventory === 'function') renderInventory();
 }
 
 function populateSubjectFilter() {
@@ -956,6 +1004,7 @@ function renderBooksMainTable() {
         const condBadge = { good: '<span class="badge badge-good">Good</span>', fair: '<span class="badge badge-fair">Fair</span>', poor: '<span class="badge badge-poor">Poor</span>' }[b.condition_status] || '<span class="badge badge-cancelled">—</span>';
         const availColor = b.quantity_available === 0 ? 'var(--danger)' : (b.quantity_available < 10 ? 'var(--warning)' : 'var(--success)');
         const actions = window.isStaff ? `<td class="action-buttons">
+            <button class="btn btn-sm btn-outline-primary" onclick="openBookQrModal(${b.id})" title="QR Code"><i class="fas fa-qrcode"></i></button>
             <button class="btn btn-sm btn-outline-secondary" onclick="openEditBookModal(${b.id})" title="Edit"><i class="fas fa-pen"></i></button>
             <button class="btn btn-sm btn-outline-danger" onclick="deleteBook(${b.id})" title="Delete"><i class="fas fa-trash"></i></button>
         </td>` : '';
@@ -968,7 +1017,8 @@ function renderBooksMainTable() {
             <td>${esc(b.subject || '—')}</td>
             <td>${esc(b.grade_level || '—')}</td>
             <td>${b.location_label ? `<span style="background:var(--primary-light);color:var(--primary);padding:2px 8px;border-radius:99px;font-size:.7rem;font-weight:600;"><i class="fas fa-location-dot me-1"></i>${esc(b.location_label)}</span>` : '<span style="color:var(--text-light);">—</span>'}</td>
-            <td><span style="font-weight:700;color:${availColor};">${b.quantity_available}</span><span style="color:var(--text-muted);font-size:.75rem;"> / ${b.quantity_total}</span></td>
+            <td><span style="font-weight:700;color:${availColor};">${b.quantity_available}</span></td>
+            <td><span style="color:var(--text-muted);font-size:.82rem;">${b.quantity_total}</span></td>
             <td>${condBadge}</td>
             ${actions}
         </tr>`;
@@ -1124,7 +1174,8 @@ async function submitDeliveryForm() {
     await loadDeliveries();
 }
 
-function openBorrowRequestModal() {
+async function openBorrowRequestModal() {
+    if (!allBooks.length) await loadBooks();
     document.getElementById('book-borrow-request-form')?.reset();
     document.getElementById('book-borrow-items-body').innerHTML = '';
     clearSelectedBorrower();
@@ -1149,7 +1200,7 @@ async function submitBookBorrowRequestForm() {
 
     const borrowerName    = document.getElementById('selectedBorrowerNameInput')?.value?.trim()
                          || form.querySelector('[name="borrower_name"]')?.value?.trim() || '';
-    if (!borrowerName) {
+    if (window.isStaff && !borrowerName) {
         alert('Please search for and select a borrower first.');
         return;
     }
@@ -1160,25 +1211,32 @@ async function submitBookBorrowRequestForm() {
     const borrowerContact = document.getElementById('selectedBorrowerContactInput')?.value?.trim()
                          || form.querySelector('[name="borrower_contact"]')?.value || '';
 
-    if (!borrowDate || !returnDate) {
-        alert('Please select both a Borrow Date and Return Date.');
-        return;
-    }
-    if (new Date(returnDate) <= new Date(borrowDate)) {
-        alert('Return Date must be after Borrow Date.');
+    if (borrowDate && returnDate && returnDate < borrowDate) {
+        alert('Return Date cannot be before Borrow Date.');
         return;
     }
 
-    // Collect book rows
+    // Collect book rows — warn if any selected book has zero available copies
     const rows = document.querySelectorAll('#book-borrow-items-body tr');
     const cleanItems = [];
+    const unavailable = [];
     rows.forEach(row => {
         const bookId = row.querySelector('.borrow-book-select')?.value;
         const qty    = parseInt(row.querySelector('.borrow-qty')?.value || '1', 10);
         if (bookId && parseInt(bookId) > 0) {
             cleanItems.push({ book_id: bookId, quantity: Math.max(1, qty) });
+            const book = allBooks.find(b => String(b.id) === String(bookId));
+            if (book && (book.quantity_available ?? 1) < 1) unavailable.push(book.title);
         }
     });
+    if (unavailable.length) {
+        const proceed = confirm(
+            'The following book(s) currently have 0 copies on the shelf:\n\n' +
+            unavailable.map(t => '• ' + t).join('\n') +
+            '\n\nThe request will be submitted as pending and staff will review availability. Continue?'
+        );
+        if (!proceed) return;
+    }
 
     if (!cleanItems.length) {
         alert('Please select at least one valid book.');
@@ -1187,8 +1245,13 @@ async function submitBookBorrowRequestForm() {
 
     const data = new URLSearchParams();
     data.append('action',           'book_borrow_request_add');
-    data.append('borrower_name',    borrowerName);
-    data.append('borrower_contact', borrowerContact);
+    if (window.isStaff) {
+        // Send the selected borrower ID directly to avoid name-based dedup collisions
+        const borrowerId = document.getElementById('selectedBorrowerId')?.value || '';
+        if (borrowerId) data.append('borrower_id', borrowerId);
+        data.append('borrower_name',    borrowerName);
+        data.append('borrower_contact', borrowerContact);
+    }
     data.append('borrow_type',      borrowType);
     data.append('borrow_date',      borrowDate);
     data.append('return_date',      returnDate);
@@ -1211,6 +1274,10 @@ async function submitBookBorrowRequestForm() {
     }
 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('bookBorrowRequestModal')).hide();
+    if (typeof showToast === 'function') showToast(body.message || 'Borrow request submitted — awaiting approval.');
+    // Show the request the user just made instead of an empty "Active" view
+    const filterSel = document.getElementById('book-borrow-status-filter');
+    if (filterSel) filterSel.value = 'pending';
     await loadBookBorrowRequests();
 }
 
@@ -1368,7 +1435,7 @@ async function cancelBookBorrow(id) {
     await loadBookBorrowRequests();
 }
 
-function openBookReturnModal(id) {
+async function openBookReturnModal(id) {
     const record = bookBorrowRecords.find(r => Number(r.id) === Number(id));
     if (!record) return;
     const form = document.getElementById('book-return-form');
@@ -1376,6 +1443,31 @@ function openBookReturnModal(id) {
     document.getElementById('bookReturnBorrowId').value = record.id;
     form.querySelector('[name="return_notes"]').value = '';
     form.querySelector('[name="fine_amount"]').value = '';
+
+    // Auto-calculate overdue fine
+    const fineAlert  = document.getElementById('bookReturnFineAlert');
+    const fineDetail = document.getElementById('bookReturnFineDetail');
+    const fineAmt    = document.getElementById('bookReturnFineAmt');
+    if (fineAlert) fineAlert.style.display = 'none';
+
+    if (record.due_at) {
+        const due = new Date(String(record.due_at).replace(' ', 'T'));
+        const now = new Date();
+        if (now > due) {
+            const overdueDays = Math.ceil((now - due) / 86400000);
+            try {
+                const res = await requestJson(`${API}?action=calculate_fine&id=${id}`);
+                if (res.success && (res.data?.fine_amount ?? 0) > 0) {
+                    const fine = Number(res.data.fine_amount);
+                    const finePerDay = res.data.rate_per_day ?? 5;
+                    if (fineAlert) fineAlert.style.display = 'flex';
+                    if (fineDetail) fineDetail.textContent = `${overdueDays} day(s) overdue × PHP ${finePerDay}/day`;
+                    if (fineAmt) fineAmt.textContent = `PHP ${fine.toFixed(2)}`;
+                    form.querySelector('[name="fine_amount"]').value = fine.toFixed(2);
+                }
+            } catch (_) { /* non-fatal */ }
+        }
+    }
     const tbody = document.getElementById('book-return-items-body');
     if (!tbody) return;
 
@@ -1440,57 +1532,318 @@ async function submitBookReturnForm() {
     await loadBookBorrowRequests();
 }
 
+const annEsc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const annFmtDate = v => { if (!v) return '-'; const d = new Date(String(v).replace(' ', 'T')); return isNaN(d) ? v : new Intl.DateTimeFormat('en-PH', { year: 'numeric', month: 'short', day: '2-digit' }).format(d); };
+const annFmtFull = v => { if (!v) return '-'; const d = new Date(String(v).replace(' ', 'T')); return isNaN(d) ? v : new Intl.DateTimeFormat('en-PH', { dateStyle: 'long', timeStyle: 'short' }).format(d); };
+const annFileSize = b => { b = Number(b) || 0; if (b < 1024) return b + ' B'; if (b < 1048576) return (b / 1024).toFixed(0) + ' KB'; return (b / 1048576).toFixed(1) + ' MB'; };
+const ANN_CAT = {
+    general:    ['#e0e7ff', '#3730a3', 'General'],
+    urgent:     ['#fee2e2', '#b91c1c', 'Urgent'],
+    event:      ['#dcfce7', '#166534', 'Event'],
+    academic:   ['#dbeafe', '#1d4ed8', 'Academic'],
+    library:    ['#fef3c7', '#b45309', 'Library'],
+    memorandum: ['#f3e8ff', '#6b21a8', 'Memorandum'],
+};
+function annCatBadge(cat, big) {
+    const c = ANN_CAT[cat] || ANN_CAT.general;
+    const pad = big ? '3px 12px' : '1px 8px', fs = big ? '.74rem' : '.64rem';
+    return `<span style="background:${c[0]};color:${c[1]};padding:${pad};border-radius:99px;font-size:${fs};font-weight:700;">${c[2]}</span>`;
+}
+let _annItems = [];
+let _annFilter = { q: '', category: '' };
+
 async function loadAnnouncements() {
-    const body = await fetch('api/library_handler.php?action=announcements_get', { credentials: 'same-origin' }).then(r => r.json()).catch(() => ({ success: false }));
-    if (!body.success) return;
-    const container = document.getElementById('announcements-container');
-    if (!container) return;
-    const announcements = body.data || [];
-    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const fmt = v => { if (!v) return '-'; const d = new Date(String(v).replace(' ', 'T')); return isNaN(d) ? v : new Intl.DateTimeFormat('en-PH', { year: 'numeric', month: 'short', day: '2-digit' }).format(d); };
-    if (!announcements.length) {
-        container.innerHTML = '<div class="text-center text-muted py-5" style="font-size:.82rem;"><i class="fas fa-bullhorn me-2"></i>No announcements yet.</div>';
+    const containers = document.querySelectorAll('.announcements-container, #announcements-container');
+    if (!containers.length) return;
+
+    const params = new URLSearchParams({ action: 'announcements_get' });
+    if (_annFilter.q) params.set('q', _annFilter.q);
+    if (_annFilter.category) params.set('category', _annFilter.category);
+
+    const body = await fetch('api/library_handler.php?' + params.toString(), { credentials: 'same-origin' })
+        .then(r => r.json()).catch(() => ({ success: false }));
+
+    if (!body.success) {
+        containers.forEach(c => {
+            c.innerHTML = '<div class="text-center text-muted py-4" style="font-size:.8rem;"><i class="fas fa-triangle-exclamation me-1"></i> Could not load announcements. <a href="#" onclick="loadAnnouncements();return false;">Retry</a></div>';
+        });
         return;
     }
-    container.innerHTML = announcements.map(a => `
-        <div style="padding:14px 18px;border-bottom:1px solid var(--border);transition:background .15s;">
-            <div style="display:flex;justify-content:space-between;align-items:start;gap:12px;">
-                <div style="flex:1;min-width:0;">
-                    <div style="font-weight:600;font-size:.85rem;margin-bottom:3px;">
-                        ${esc(a.title)}
-                        ${a.is_active == 0 ? '<span style="background:#f3f4f6;color:#6b7280;padding:1px 8px;border-radius:99px;font-size:.68rem;font-weight:600;margin-left:6px;">Draft</span>' : ''}
-                    </div>
-                    <div style="font-size:.8rem;color:var(--text-muted);margin-bottom:5px;line-height:1.5;">${esc(a.body)}</div>
-                    <div style="font-size:.72rem;color:var(--text-light);">
-                        <i class="fas fa-user me-1"></i>${esc(a.posted_by_name || 'Admin')}
-                        &nbsp;·&nbsp;
-                        <i class="fas fa-clock me-1"></i>${fmt(a.created_at)}
-                    </div>
-                </div>
-                ${window.isStaff ? `<button style="background:none;border:1px solid var(--border);color:var(--text-muted);width:28px;height:28px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.75rem;flex-shrink:0;" onclick="deleteAnnouncement(${a.id})" title="Delete"><i class="fas fa-trash"></i></button>` : ''}
+
+    _annItems = body.data?.items || body.data || [];
+    annUpdateUnreadBadge(body.data?.unread_count ?? 0);
+
+    const filtering = _annFilter.q || _annFilter.category;
+    const list = _annItems.length
+        ? _annItems.map(annListRow).join('')
+        : `<div class="text-center text-muted py-5" style="font-size:.82rem;"><i class="fas fa-bullhorn me-2"></i>${filtering ? 'No announcements match your search.' : 'No announcements yet.'}</div>`;
+
+    const toolbar = `
+        <div style="display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);z-index:1;flex-wrap:wrap;">
+            <div class="input-group input-group-sm" style="flex:1;min-width:140px;">
+                <span class="input-group-text" style="font-size:.72rem;"><i class="fas fa-search"></i></span>
+                <input type="text" id="ann-search" class="form-control" placeholder="Search announcements…" value="${annEsc(_annFilter.q)}" oninput="annOnSearch(this.value)">
             </div>
-        </div>`).join('');
+            <select id="ann-cat-filter" class="form-select form-select-sm" style="width:auto;" onchange="annOnCategory(this.value)">
+                <option value="">All categories</option>
+                ${Object.keys(ANN_CAT).map(k => `<option value="${k}"${_annFilter.category === k ? ' selected' : ''}>${ANN_CAT[k][2]}</option>`).join('')}
+            </select>
+        </div>`;
+
+    containers.forEach(c => {
+        c.innerHTML = toolbar + `<div>${list}</div>`;
+    });
+    const focused = document.activeElement?.id === 'ann-search';
+    if (focused) {} // keep caret; inputs re-rendered only on full reload
+}
+window.loadAnnouncements = loadAnnouncements;
+
+function annListRow(a) {
+    const unread = !a.is_read && a.is_active != 0;
+    const pin = a.is_pinned ? '<i class="fas fa-thumbtack" style="font-size:.68rem;color:var(--primary);" title="Pinned"></i>' : '';
+    const feat = a.is_featured ? '<i class="fas fa-star" style="font-size:.68rem;color:#d97706;" title="Featured"></i>' : '';
+    const draft = a.is_active == 0 ? '<span style="background:#f3f4f6;color:#6b7280;padding:1px 7px;border-radius:99px;font-size:.62rem;font-weight:700;">Draft</span>' : '';
+    const expired = a.is_expired ? '<span style="background:#f3f4f6;color:#9ca3af;padding:1px 7px;border-radius:99px;font-size:.62rem;font-weight:700;">Expired</span>' : '';
+    const clip = a.attachment_count > 0 ? `<i class="fas fa-paperclip" style="font-size:.68rem;color:var(--text-muted);" title="${a.attachment_count} attachment(s)"></i>` : '';
+    const del = window.isStaff ? `<button style="background:none;border:1px solid var(--border);color:var(--text-muted);width:26px;height:26px;border-radius:6px;cursor:pointer;flex-shrink:0;font-size:.72rem;" onclick="event.stopPropagation();deleteAnnouncement(${a.id})" title="Delete"><i class="fas fa-trash"></i></button>` : '';
+    const excerpt = annEsc(a.excerpt || '') + ((a.excerpt || '').length >= 140 ? '…' : '');
+    return `
+        <div role="button" tabindex="0" onclick="openAnnouncement(${a.id})" onkeydown="if(event.key==='Enter')openAnnouncement(${a.id})"
+             style="padding:13px 16px;border-bottom:1px solid var(--border);display:flex;gap:11px;cursor:pointer;align-items:flex-start;background:${unread ? 'var(--primary-light,rgba(0,48,135,.04))' : 'transparent'};"
+             onmouseover="this.style.background='var(--hover-bg,rgba(0,0,0,.03))'" onmouseout="this.style.background='${unread ? 'var(--primary-light,rgba(0,48,135,.04))' : 'transparent'}'">
+            <span style="flex-shrink:0;width:8px;height:8px;border-radius:50%;margin-top:6px;background:${unread ? 'var(--primary,#003087)' : 'transparent'};"></span>
+            <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:3px;">
+                    ${annCatBadge(a.category)}
+                    <span style="font-weight:${unread ? '700' : '600'};font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;">${annEsc(a.title)}</span>
+                    ${pin}${feat}${draft}${expired}${clip}
+                </div>
+                <div style="font-size:.78rem;color:var(--text-muted);line-height:1.45;margin-bottom:4px;">${excerpt}</div>
+                <div style="font-size:.7rem;color:var(--text-light);">
+                    <i class="fas fa-user me-1"></i>${annEsc(a.posted_by_name || 'Admin')}&nbsp;·&nbsp;<i class="fas fa-clock me-1"></i>${annFmtDate(a.created_at)}
+                </div>
+            </div>
+            ${del}
+        </div>`;
+}
+
+let _annSearchTimer = null;
+function annOnSearch(v) {
+    _annFilter.q = v;
+    clearTimeout(_annSearchTimer);
+    _annSearchTimer = setTimeout(() => {
+        // Re-render only the list portion to preserve the search caret
+        annRenderListOnly();
+    }, 250);
+}
+function annOnCategory(v) { _annFilter.category = v; loadAnnouncements(); }
+
+async function annRenderListOnly() {
+    const params = new URLSearchParams({ action: 'announcements_get' });
+    if (_annFilter.q) params.set('q', _annFilter.q);
+    if (_annFilter.category) params.set('category', _annFilter.category);
+    const body = await fetch('api/library_handler.php?' + params.toString(), { credentials: 'same-origin' })
+        .then(r => r.json()).catch(() => ({ success: false }));
+    if (!body.success) return;
+    _annItems = body.data?.items || [];
+    const rows = _annItems.length
+        ? _annItems.map(annListRow).join('')
+        : `<div class="text-center text-muted py-5" style="font-size:.82rem;"><i class="fas fa-bullhorn me-2"></i>No announcements match your search.</div>`;
+    document.querySelectorAll('.announcements-container, #announcements-container').forEach(c => {
+        const listBox = c.querySelector('div:last-child');
+        if (listBox && listBox.previousElementSibling) listBox.innerHTML = rows;
+    });
+}
+window.annOnSearch = annOnSearch;
+window.annOnCategory = annOnCategory;
+
+function annUpdateUnreadBadge(n) {
+    document.querySelectorAll('[data-ann-unread]').forEach(el => {
+        el.textContent = n > 0 ? n : '';
+        el.style.display = n > 0 ? '' : 'none';
+    });
+}
+
+// ── Full-page reader (Gmail/Medium-style) ─────────────────────────────────────
+async function openAnnouncement(id) {
+    const modalEl = document.getElementById('announcementReaderModal');
+    if (!modalEl) return;
+    const bodyEl = document.getElementById('annReaderBody');
+    bodyEl.innerHTML = '<div class="text-center text-muted py-5"><i class="fas fa-spinner fa-spin me-2"></i>Loading…</div>';
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+
+    const res = await fetch('api/library_handler.php?action=announcement_view&id=' + encodeURIComponent(id), { credentials: 'same-origin' })
+        .then(r => r.json()).catch(() => ({ success: false }));
+    if (!res.success) {
+        bodyEl.innerHTML = `<div class="text-center text-muted py-5"><i class="fas fa-triangle-exclamation me-2"></i>${annEsc(res.message || 'Could not load this announcement.')}</div>`;
+        return;
+    }
+    const a = res.data || {};
+    const expired = a.is_expired ? '<span style="background:#f3f4f6;color:#9ca3af;padding:2px 10px;border-radius:99px;font-size:.72rem;font-weight:700;">Expired</span>' : '';
+    const pin = a.is_pinned ? '<span style="color:var(--primary);font-size:.72rem;"><i class="fas fa-thumbtack me-1"></i>Pinned</span>' : '';
+
+    // Body: render sanitized HTML for rich announcements, escape plain-text ones.
+    // Self-contained styling (.ann-reader-text) so it renders without Quill CSS for users.
+    const bodyContent = (a.body_format === 'html' && a.body_html != null)
+        ? `<div class="ann-reader-text">${a.body_html}</div>`
+        : `<div class="ann-reader-text" style="white-space:pre-wrap;word-break:break-word;">${annEsc(a.body)}</div>`;
+
+    const FILE_ICON = { pdf: 'fa-file-pdf', doc: 'fa-file-word', docx: 'fa-file-word', xls: 'fa-file-excel', xlsx: 'fa-file-excel', csv: 'fa-file-csv', ppt: 'fa-file-powerpoint', pptx: 'fa-file-powerpoint', jpg: 'fa-file-image', jpeg: 'fa-file-image', png: 'fa-file-image', gif: 'fa-file-image', webp: 'fa-file-image', bmp: 'fa-file-image' };
+    const isImg = t => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(String(t || '').toLowerCase());
+    const atts = a.attachments || [];
+    const images = atts.filter(f => isImg(f.file_type));
+    const docs = atts.filter(f => !isImg(f.file_type));
+
+    const gallery = images.length ? `
+        <div style="margin-top:28px;">
+            <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:12px;"><i class="fas fa-images me-1"></i>Images (${images.length})</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;">
+                ${images.map(f => { const u = 'api/library_handler.php?action=announcement_file&id=' + f.id; return `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${annEsc(f.file_name)}" loading="lazy" style="width:100%;height:120px;object-fit:cover;border-radius:8px;border:1px solid var(--border);"></a>`; }).join('')}
+            </div>
+        </div>` : '';
+
+    const docList = docs.length ? `
+        <div style="margin-top:28px;">
+            <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:12px;"><i class="fas fa-paperclip me-1"></i>Attachments (${docs.length})</div>
+            ${docs.map(f => { const u = 'api/library_handler.php?action=announcement_file&id=' + f.id; const icon = FILE_ICON[String(f.file_type || '').toLowerCase()] || 'fa-file'; return `
+                <div style="border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:10px;display:flex;align-items:center;gap:10px;">
+                    <i class="fas ${icon}" style="font-size:1.25rem;color:var(--primary);flex-shrink:0;"></i>
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${annEsc(f.file_name)}</div>
+                        <div style="font-size:.7rem;color:var(--text-muted);text-transform:uppercase;">${annEsc(f.file_type)} · ${annFileSize(f.file_size)}</div>
+                    </div>
+                    <a class="btn btn-sm btn-outline-secondary" href="${u}" target="_blank" rel="noopener" title="View"><i class="fas fa-eye"></i></a>
+                    <a class="btn btn-sm btn-outline-primary" href="${u}&download=1" title="Download"><i class="fas fa-download"></i></a>
+                </div>`; }).join('')}
+        </div>` : '';
+
+    const updated = a.updated_at && a.updated_at !== a.created_at
+        ? `<span><i class="fas fa-pen me-1"></i>Updated ${annFmtFull(a.updated_at)}</span>` : '';
+
+    bodyEl.innerHTML = `
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">${annCatBadge(a.category, true)}${pin}${expired}</div>
+        <h1 class="ann-reader-title">${annEsc(a.title)}</h1>
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;color:var(--text-muted);font-size:.82rem;padding-bottom:18px;margin-bottom:24px;border-bottom:1px solid var(--border);">
+            <span><i class="fas fa-user me-1"></i>${annEsc(a.posted_by_name || 'Library Admin')}</span>
+            <span><i class="fas fa-calendar me-1"></i>${annFmtFull(a.created_at)}</span>
+            ${updated}
+            ${a.expire_at ? `<span><i class="fas fa-hourglass-end me-1"></i>Expires ${annFmtDate(a.expire_at)}</span>` : ''}
+        </div>
+        ${bodyContent}
+        ${gallery}
+        ${docList}`;
+
+    const item = _annItems.find(x => x.id == id);
+    if (item && !item.is_read) { item.is_read = true; loadAnnouncements(); }
+}
+
+// Keep announcements fresh: refresh when returning to the dashboard and poll periodically
+document.addEventListener('tabChanged', e => { if (e.detail === 'dashboard') loadAnnouncements(); });
+setInterval(() => { if (document.getElementById('dashboard')?.classList.contains('active')) loadAnnouncements(); }, 60000);
+
+// ── Rich-text editor (Quill) — structured styles only, no arbitrary fonts ─────
+let _annQuill = null;
+function annInitEditor() {
+    if (_annQuill || typeof Quill === 'undefined') return _annQuill;
+    const el = document.getElementById('announcementEditor');
+    if (!el) return null;
+    _annQuill = new Quill(el, {
+        theme: 'snow',
+        placeholder: 'Write the announcement…',
+        modules: {
+            toolbar: {
+                container: '#announcementEditorToolbar',
+                handlers: {
+                    callout: function (value) {
+                        // Wrap the current line(s) in a styled callout box
+                        const range = this.quill.getSelection(true);
+                        const cls = value === 'warning' ? 'callout callout-warning' : 'callout callout-info';
+                        this.quill.formatLine(range.index, range.length || 1, 'blockquote', false);
+                        const line = this.quill.getLine(range.index)[0];
+                        if (line && line.domNode) { line.domNode.className = cls; }
+                    },
+                    image: annImageHandler,
+                },
+            },
+        },
+    });
+    return _annQuill;
+}
+
+function annImageHandler() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        if (file.size > 20 * 1024 * 1024) { alert('Image exceeds 20 MB.'); return; }
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const fd = new FormData();
+        fd.append('action', 'announcement_image_upload');
+        fd.append('image', file);
+        const res = await fetch('api/library_handler.php', { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf }, body: fd })
+            .then(r => r.json()).catch(() => ({ success: false }));
+        if (!res.success) { alert(res.message || 'Image upload failed.'); return; }
+        const range = _annQuill.getSelection(true);
+        _annQuill.insertEmbed(range.index, 'image', res.data.url, 'user');
+        _annQuill.setSelection(range.index + 1);
+    };
+    input.click();
 }
 
 function openAddAnnouncementModal() {
-    document.getElementById('announcementTitle').value = '';
-    document.getElementById('announcementBody').value = '';
-    document.getElementById('announcementStatus').value = '1';
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('addAnnouncementModal')).show();
+    const modal = document.getElementById('addAnnouncementModal');
+    bootstrap.Modal.getOrCreateInstance(modal).show();
+    // Init/reset after the modal is shown so Quill measures correctly
+    modal.addEventListener('shown.bs.modal', function once() {
+        modal.removeEventListener('shown.bs.modal', once);
+        annInitEditor();
+        if (_annQuill) _annQuill.setText('');
+    }, { once: true });
+    ['announcementTitle', 'announcementExpire', 'announcementPublish'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    set('announcementStatus', '1'); set('announcementPriority', 'normal'); set('announcementCategory', 'general');
+    ['announcementPinned', 'announcementFeatured'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+    const fl = document.getElementById('announcementFiles'); if (fl) fl.value = '';
 }
 
 async function submitAnnouncementForm() {
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
     const title = document.getElementById('announcementTitle').value.trim();
-    const body_text = document.getElementById('announcementBody').value.trim();
-    const is_active = document.getElementById('announcementStatus').value;
-    if (!title || !body_text) { alert('Title and message are required.'); return; }
-    const data = new URLSearchParams({ action: 'announcements_add', title, body: body_text, is_active });
-    const body = await fetch('api/library_handler.php', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrfToken }, body: data }).then(r => r.json()).catch(() => ({ success: false }));
+    annInitEditor();
+    const html = _annQuill ? _annQuill.root.innerHTML : '';
+    const plain = _annQuill ? _annQuill.getText().trim() : '';
+    if (!title || !plain) { alert('Title and content are required.'); return; }
+
+    const fd = new FormData();
+    fd.append('action', 'announcements_add');
+    fd.append('title', title);
+    fd.append('body', html);
+    fd.append('body_format', 'html');
+    fd.append('category', document.getElementById('announcementCategory')?.value || 'general');
+    fd.append('is_active', document.getElementById('announcementStatus').value);
+    fd.append('priority', document.getElementById('announcementPriority')?.value || 'normal');
+    fd.append('is_pinned', document.getElementById('announcementPinned')?.checked ? '1' : '0');
+    fd.append('is_featured', document.getElementById('announcementFeatured')?.checked ? '1' : '0');
+    fd.append('publish_at', document.getElementById('announcementPublish')?.value || '');
+    fd.append('expire_at', document.getElementById('announcementExpire')?.value || '');
+    const files = document.getElementById('announcementFiles')?.files || [];
+    for (let i = 0; i < files.length; i++) fd.append('attachments[]', files[i]);
+
+    const btn = document.getElementById('save-announcement-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Posting…'; }
+    const body = await fetch('api/library_handler.php', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': csrfToken }, body: fd,
+    }).then(r => r.json()).catch(() => ({ success: false }));
+    if (btn) { btn.disabled = false; btn.innerHTML = 'Save Announcement'; }
+
     if (!body.success) { alert(body.message || 'Failed.'); return; }
     bootstrap.Modal.getOrCreateInstance(document.getElementById('addAnnouncementModal')).hide();
     await loadAnnouncements();
 }
+window.openAnnouncement = openAnnouncement;
 
 async function deleteAnnouncement(id) {
     if (!confirm('Delete this announcement?')) return;
@@ -1558,7 +1911,7 @@ function searchBorrowers() {
                     <div>
                         <span class="fw-semibold">${esc(b.name)}</span>
                         <span class="badge ${b.borrower_type === 'school' ? 'bg-info' : 'bg-secondary'} ms-2">${esc(b.borrower_type)}</span>
-                        ${b.lrn ? `<span class="text-muted small ms-2">LRN: ${esc(b.lrn)}</span>` : ''}
+                        ${window.isAdmin && b.lrn ? `<span class="text-muted small ms-2">LRN: ${esc(b.lrn)}</span>` : ''}
                     </div>
                     ${b.contact_person ? `<small class="text-muted">${esc(b.contact_person)}</small>` : ''}
                 </div>
@@ -1572,7 +1925,8 @@ function selectBorrower(borrower) {
 
     document.getElementById('selectedBorrowerName').textContent = borrower.name;
     document.getElementById('selectedBorrowerType').textContent = borrower.borrower_type;
-    document.getElementById('selectedBorrowerLrn').textContent = borrower.lrn ? `LRN: ${borrower.lrn}` : '';
+    const lrnEl = document.getElementById('selectedBorrowerLrn');
+    if (lrnEl) lrnEl.textContent = window.isAdmin && borrower.lrn ? `LRN: ${borrower.lrn}` : '';
     document.getElementById('selectedBorrowerContact').textContent = borrower.contact ? `📞 ${borrower.contact}` : '';
     document.getElementById('selectedBorrowerId').value = borrower.id;
     document.getElementById('selectedBorrowerNameInput').value = borrower.name;
@@ -1585,13 +1939,14 @@ function selectBorrower(borrower) {
 
 function clearSelectedBorrower() {
     selectedBorrower = null;
-    document.getElementById('selectedBorrowerId').value = '';
-    document.getElementById('selectedBorrowerNameInput').value = '';
-    document.getElementById('selectedBorrowerContactInput').value = '';
-    document.getElementById('selectedBorrowerDisplay').style.display = 'none';
-    document.getElementById('borrowerSearchInput').value = '';
-    document.getElementById('borrowerSearchResults').style.display = 'none';
-    document.getElementById('borrowerSearchResults').innerHTML = '';
+    // These elements only exist for staff — viewers borrow as themselves
+    const set = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
+    set('selectedBorrowerId',           el => el.value = '');
+    set('selectedBorrowerNameInput',    el => el.value = '');
+    set('selectedBorrowerContactInput', el => el.value = '');
+    set('selectedBorrowerDisplay',      el => el.style.display = 'none');
+    set('borrowerSearchInput',          el => el.value = '');
+    set('borrowerSearchResults',        el => { el.style.display = 'none'; el.innerHTML = ''; });
 }
 
 function showRegisterBorrowerForm() {

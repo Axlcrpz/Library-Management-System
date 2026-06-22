@@ -1,0 +1,43 @@
+-- ============================================================================
+--  deploy/seed.sql.example — SAFE, schema-only bootstrap (NO real data)
+-- ============================================================================
+-- The real deploy/seed.sql (a full production dump containing PII + password
+-- hashes + a live API key) is GITIGNORED and must NEVER be committed.
+--
+-- This template seeds only the `users` table the application assumes already
+-- exists; every other table is created automatically by ensureLibrarySchema()
+-- on the first request. No admin account is shipped, by design.
+--
+-- FIRST-RUN SETUP
+--   1.  cp deploy/seed.sql.example deploy/seed.sql
+--   2.  Generate a bcrypt hash for your first admin (no plaintext anywhere):
+--         docker compose exec web php -r "echo password_hash('YOUR_STRONG_PASSWORD', PASSWORD_DEFAULT), PHP_EOL;"
+--   3.  Insert ONE admin row (replace the email and the hash):
+--         INSERT INTO users (username, password, full_name, role, status, is_active)
+--         VALUES ('admin@your-office.example', '<paste-hash-here>', 'Administrator', 'admin', 'approved', 1);
+--   4.  Never commit deploy/seed.sql.
+-- ============================================================================
+
+CREATE DATABASE IF NOT EXISTS `library_sys`
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+USE `library_sys`;
+
+CREATE TABLE IF NOT EXISTS `users` (
+  `id`             INT AUTO_INCREMENT PRIMARY KEY,
+  `username`       VARCHAR(255) NOT NULL UNIQUE,            -- login email
+  `password`       VARCHAR(255) NOT NULL,                   -- bcrypt hash, NEVER plaintext
+  `full_name`      VARCHAR(255) NULL,
+  `role`           VARCHAR(20)  NOT NULL DEFAULT 'viewer',  -- admin | staff | viewer
+  `status`         VARCHAR(20)  NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  `is_active`      TINYINT(1)   NOT NULL DEFAULT 1,
+  `classification` VARCHAR(50)  NOT NULL DEFAULT 'individual',
+  `contact`        VARCHAR(50)  NULL,
+  `lrn`            VARCHAR(12)  NULL,
+  `school_name`    VARCHAR(255) NULL,
+  `grade_level`    VARCHAR(100) NULL,
+  `profile_image`  VARCHAR(500) NULL,
+  `avatar_id`      VARCHAR(120) NULL,
+  `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- (No admin row shipped — create yours per FIRST-RUN SETUP above.)

@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PRODUCTION stack — hardened. Bring up with:
+#     docker compose -f docker-compose.prod.yml up -d --build
+#
+# Differences vs the dev docker-compose.yml:
+#   • NO phpMyAdmin (admin the DB over an SSH tunnel instead)
+#   • DB port is NOT published to the host (reachable only on the compose network)
+#   • Web is bound to 127.0.0.1 only — a reverse proxy / Cloudflare Tunnel
+#     terminates TLS in front; the app is never exposed directly on 0.0.0.0
+#   • NO source bind-mount — the immutable built image is what runs
+#   • Secrets are REQUIRED (no weak defaults): an unset value fails the command
+#   • Healthchecks gate startup ordering and enable auto-restart on failure
+#
+# Provide secrets via a .env file next to this one (see .env.example):
+#     DB_USER=...  DB_PASS=...  MYSQL_ROOT_PASSWORD=...
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  web:
+    build: .
+    image: lms_web:prod
+    container_name: lms_web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"     # loopback only — front this with TLS (proxy/tunnel)
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME:-library_sys}
+      DB_USER: ${DB_USER:?set DB_USER in .env}
+      DB_PASS: ${DB_PASS:?set DB_PASS in .env}
+    volumes:
+      - ./storage:/var/www/html/storage   # persist uploads/logs across rebuilds
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1/health.php')!==false?0:1);"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  db:
+    image: mysql:8.0
+    container_name: lms_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${DB_NAME:-library_sys}
+      MYSQL_USER: ${DB_USER:?set DB_USER in .env}
+      MYSQL_PASSWORD: ${DB_PASS:?set DB_PASS in .env}
+    # No host port mapping in production — DB is internal to the compose network.
+    volumes:
+      - db_data:/var/lib/mysql
+      # Seeds catalog/users on a FRESH database only; ignored once data exists.
+      - ./deploy/seed.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+volumes:
+  db_data:

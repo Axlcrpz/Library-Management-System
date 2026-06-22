@@ -134,11 +134,11 @@ $reportHeader = $reportTitles[$report] ?? 'Report';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= htmlspecialchars($reportHeader) ?> - SDO Library</title>
-    <script src="../../assets/js/theme.js"></script>
+    <script src="assets/js/theme.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="assets/css/style.css" rel="stylesheet">
-    <link href="../../assets/css/theme.css" rel="stylesheet">
+    <link href="assets/css/theme.css" rel="stylesheet">
     <style>
         .report-summary dt { font-weight: 600; }
         .print-toolbar { margin-bottom: 1.5rem; }

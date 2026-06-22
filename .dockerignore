@@ -1,0 +1,49 @@
+# Keep the production image lean and secret-free. Everything listed here is
+# excluded from the build context, so `COPY . /var/www/html/` never bakes it in.
+
+# Version control & editor/project tooling
+.git
+.gitignore
+.gitattributes
+.github
+.claude
+
+# Documentation & project notes (not needed at runtime)
+docs
+*.md
+deploy/RUNBOOK.md
+deploy/STEP-BY-STEP.md
+
+# Secrets / local environment / PII (NEVER ship these)
+.env
+.env.*
+!.env.example
+deploy/seed.sql
+*.sql.gz
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.cloudflared
+cert.pem
+
+# Dev dependencies, tests & CI artifacts (prod runs the image, not the test suite)
+vendor
+tests
+phpunit.xml
+.phpunit.cache
+composer.lock
+
+# CLI-only diagnostics & scratch (not meant to live in the web image)
+login_debug.php
+reset_admin.php
+_locdbg.php
+
+# Dev binaries, tunnels, logs, backups, local compose override
+cloudflared.exe
+*.exe
+*.log
+deploy/tunnel.log
+backups
+docker-compose.override.yml

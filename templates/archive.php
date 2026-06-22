@@ -14,8 +14,8 @@
             <table class="table table-hover activity-table mb-0">
                 <thead>
                     <tr>
-                        <th>Title</th><th>Type</th><th>Section / Location</th><th>Document Date</th><th>Borrowed By</th><th>Status</th><th>File</th>
-                        <th>Actions</th>
+                        <th>Title</th><th>Type</th><th>Section / Location</th><th>Document Date</th><?php if ($isAdmin): ?><th>Borrowed By</th><?php endif; ?><th>Status</th><th>File</th>
+                        <?php if ($isAdmin): ?><th>Actions</th><?php endif; ?>
                     </tr>
                 </thead>
                 <tbody id="activities-table-body-archive"></tbody>

@@ -1,0 +1,70 @@
+# ============================================================================
+#  SECRETS, PII & INFRASTRUCTURE — NEVER COMMIT (government system)
+# ============================================================================
+# Real environment files (keep ONLY .env.example in the repo)
+.env
+.env.*
+!.env.example
+
+# Real database dump — contains PII (emails, phones, LRNs), password hashes,
+# and live API keys. Ship deploy/seed.sql.example (schema only) instead.
+/deploy/seed.sql
+*.sql.gz
+
+# Internal deployment runbooks — reference the production domain + Cloudflare
+# tunnel hostnames (infrastructure disclosure). Keep these as private docs.
+/deploy/RUNBOOK.md
+/deploy/STEP-BY-STEP.md
+/deploy/tunnel.log
+
+# Cloudflare tunnel: binary, credentials, and config
+/cloudflared.exe
+*.exe
+/.cloudflared/
+cert.pem
+*credentials*.json
+
+# CLI debug / admin-reset tools (carry a default admin password literal)
+/login_debug.php
+/reset_admin.php
+/_locdbg.php
+
+# Private keys & certificates of any kind
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.pkcs12
+id_rsa*
+*.ppk
+
+# Editor / agent state (local paths, not project source)
+/.claude/
+/.vscode/
+/.idea/
+
+# ============================================================================
+#  Runtime data & build artifacts (data, not source)
+# ============================================================================
+# User uploads (PII: profile photos, documents, delivery scans)
+/storage/attachments/announcements/*
+/storage/attachments/avatars/*
+/storage/attachments/deliveries/*
+/storage/profiles/*
+/storage/logs/
+# keep the folder guards
+!**/.htaccess
+!**/.gitkeep
+
+# DB backups (data)
+/backups/
+
+# Dependencies / caches (installed per-environment)
+/vendor/
+/.phpunit.cache/
+
+# Logs & OS / editor noise
+*.log
+.DS_Store
+Thumbs.db

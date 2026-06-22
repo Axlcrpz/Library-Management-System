@@ -14,7 +14,7 @@
     <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
         <span></span>
         <div class="d-flex align-items-center gap-2 flex-wrap">
-            <?php if ($isAdmin): ?>
+            <?php if ($isStaff): ?>
             <button type="button" class="btn btn-primary btn-sm btn-open-add"><i class="fas fa-plus me-1"></i> Add Document</button>
             <?php endif; ?>
             <?php if ($isAdmin): ?>

@@ -1,17 +1,18 @@
 <?php
-$hour     = (int) date('H');
-$greeting = $hour < 12 ? 'Good morning' : ($hour < 17 ? 'Good afternoon' : 'Good evening');
-$userName = $currentUser['full_name'] ?? 'Guest';
-$firstName = explode(' ', trim($userName))[0];
-$today    = date('l, F j, Y');
+$userName  = $currentUser['full_name'] ?? 'Guest';
+$firstName = htmlspecialchars(explode(' ', trim($userName))[0]);
 ?>
 
 <!-- ── Welcome Banner ─────────────────────────────── -->
 <div class="welcome-banner mb-4">
     <div style="position:relative;z-index:1;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
-        <div>
-            <div class="welcome-title"><?= $greeting ?>, <?= htmlspecialchars($firstName) ?>!</div>
-            <div class="welcome-sub"><?= $today ?> &nbsp;·&nbsp; Here's what's happening today.</div>
+        <div id="greeting-clock" style="line-height:1.2;">
+            <div id="clock-time" style="font-size:1.6rem;font-weight:700;letter-spacing:.05em;color:#fff;"></div>
+            <div id="clock-date" style="font-size:.75rem;opacity:.75;margin-top:2px;"></div>
+        </div>
+        <div style="text-align:center;">
+            <div class="welcome-title" id="greeting-text">Hello, <?= $firstName ?>!</div>
+            <div class="welcome-sub" id="greeting-date">&nbsp;·&nbsp; Here's what's happening today.</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <select id="yearFilterDashboard" class="form-select form-select-sm"
@@ -27,6 +28,32 @@ $today    = date('l, F j, Y');
     </div>
 </div>
 
+<script>
+(function() {
+    function updateGreeting() {
+        var now  = new Date();
+        var h    = now.getHours();
+        var g    = h < 12 ? 'Good morning' : (h < 18 ? 'Good afternoon' : 'Good evening');
+        var name = <?= json_encode($firstName) ?>;
+        var days   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        var min  = String(now.getMinutes()).padStart(2,'0');
+        var sec  = String(now.getSeconds()).padStart(2,'0');
+        var hr   = String(h).padStart(2,'0');
+        var gel  = document.getElementById('greeting-text');
+        var del  = document.getElementById('greeting-date');
+        var tel  = document.getElementById('clock-time');
+        var dtel = document.getElementById('clock-date');
+        if (gel)  gel.textContent  = g + ', ' + name + '!';
+        if (del)  del.textContent  = "Here's what's happening today.";
+        if (tel)  tel.textContent  = hr + ':' + min + ':' + sec;
+        if (dtel) dtel.textContent = days[now.getDay()] + ', ' + months[now.getMonth()] + ' ' + now.getDate() + ', ' + now.getFullYear();
+    }
+    updateGreeting();
+    setInterval(updateGreeting, 1000);
+})();
+</script>
+
 <?php if ($isAdmin): ?>
 <!-- ════════════════════════════════════════════════
      ADMIN DASHBOARD
@@ -36,11 +63,11 @@ $today    = date('l, F j, Y');
 <div class="row g-3 mb-4">
     <?php
     $quickActions = [
-        ['label'=>'Add Book',         'icon'=>'fa-book-medical',   'color'=>'var(--primary)',  'bg'=>'var(--primary-light)',   'onclick'=>'openAddBookModal()'],
-        ['label'=>'Log Delivery',     'icon'=>'fa-truck-ramp-box', 'color'=>'var(--success)',  'bg'=>'var(--success-light)',   'onclick'=>'openAddDeliveryModal()'],
-        ['label'=>'New Borrow',       'icon'=>'fa-hand-holding',   'color'=>'var(--warning)',  'bg'=>'var(--warning-light)',   'onclick'=>"switchTabById('borrowing')"],
-        ['label'=>'Add Document',     'icon'=>'fa-file-circle-plus','color'=>'var(--purple)',  'bg'=>'var(--purple-light)',    'onclick'=>"document.querySelector('.btn-open-add')?.click()"],
-        ['label'=>'Post Announcement','icon'=>'fa-bullhorn',        'color'=>'var(--info)',     'bg'=>'var(--info-light)',      'onclick'=>'openAddAnnouncementModal()'],
+        ['label'=>'Add Book',         'icon'=>'fa-book-medical',    'color'=>'var(--primary)', 'bg'=>'var(--primary-light)',  'onclick'=>'openAddBookModal()'],
+        ['label'=>'Log Delivery',     'icon'=>'fa-truck-ramp-box',  'color'=>'var(--success)', 'bg'=>'var(--success-light)',  'onclick'=>'openAddDeliveryModal()'],
+        ['label'=>'New Borrow',       'icon'=>'fa-hand-holding',    'color'=>'var(--warning)', 'bg'=>'var(--warning-light)',  'onclick'=>"switchTabById('borrowing')"],
+        ['label'=>'Add Document',     'icon'=>'fa-file-circle-plus','color'=>'var(--purple)',  'bg'=>'var(--purple-light)',   'onclick'=>"document.querySelector('.btn-open-add')?.click()"],
+        ['label'=>'Post Announcement','icon'=>'fa-bullhorn',         'color'=>'var(--info)',    'bg'=>'var(--info-light)',     'onclick'=>'openAddAnnouncementModal()'],
     ];
     foreach ($quickActions as $qa): ?>
     <div class="col">
@@ -57,29 +84,74 @@ $today    = date('l, F j, Y');
     <?php endforeach; ?>
 </div>
 
-<!-- Stat cards row 1 — Books -->
+<!-- ── Inventory summary — unified KPIs + category breakdown ─────────────────── -->
+<div class="card mb-4" id="inventorySummaryCard">
+    <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2" style="padding:12px 18px;">
+        <span style="font-weight:700;font-size:.9rem;display:flex;align-items:center;gap:8px;">
+            <i class="fas fa-book" style="color:var(--primary);font-size:.85rem;"></i> Book Inventory
+        </span>
+        <button class="btn btn-sm btn-outline-primary" style="font-size:.74rem;padding:4px 11px;"
+                onclick="switchTabById('books')">
+            <i class="fas fa-up-right-from-square me-1"></i> Open inventory
+        </button>
+    </div>
+
+    <!-- KPI strip -->
+    <div class="row g-0" style="border-bottom:1px solid var(--border);">
+        <?php
+        $invKpis = [
+            ['id'=>'book-stat-total',     'label'=>'Total copies', 'color'=>'var(--primary)', 'sub'=>'in catalog'],
+            ['id'=>'book-stat-available', 'label'=>'Available',    'color'=>'var(--success)', 'sub'=>'on the shelf'],
+            ['id'=>'book-stat-borrowed',  'label'=>'Borrowed',     'color'=>'var(--warning)', 'sub'=>'checked out'],
+            ['id'=>'book-stat-overdue',   'label'=>'Overdue',      'color'=>'var(--danger)',  'sub'=>'past due'],
+        ];
+        foreach ($invKpis as $i => $k): ?>
+        <div class="col-6 col-md-3" style="padding:14px 18px;<?= $i < 3 ? 'border-right:1px solid var(--border);' : '' ?>">
+            <div style="font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted,#9ca3af);">
+                <?= $k['label'] ?>
+            </div>
+            <div id="<?= $k['id'] ?>" style="font-size:1.7rem;font-weight:800;color:<?= $k['color'] ?>;line-height:1.15;">—</div>
+            <div style="font-size:.64rem;color:var(--text-muted,#9ca3af);"><?= $k['sub'] ?></div>
+        </div>
+        <?php endforeach; ?>
+    </div>
+
+    <!-- Category breakdown header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:11px 18px 4px;">
+        <span style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted,#9ca3af);">
+            By category <span id="bcat-count" style="font-weight:600;"></span>
+        </span>
+        <div class="input-group input-group-sm" style="width:180px;">
+            <span class="input-group-text" style="font-size:.7rem;"><i class="fas fa-search"></i></span>
+            <input type="text" id="bcat-search" class="form-control" placeholder="Filter categories…"
+                   oninput="renderCategoryList()" style="font-size:.78rem;">
+        </div>
+    </div>
+
+    <!-- Category list (each row links to filtered Inventory) -->
+    <div id="bcatList" style="padding:4px 10px 10px;">
+        <div class="text-center text-muted py-4" style="font-size:.82rem;">
+            <i class="fas fa-spinner fa-spin me-1"></i> Loading categories…
+        </div>
+    </div>
+
+    <!-- Smart empty/data-quality banner -->
+    <div id="bcat-banner" style="display:none;margin:0 14px 14px;"></div>
+</div>
+
+<!-- Today's book activity — the one KPI not in the inventory card above -->
 <div class="row g-3 mb-3">
-    <?php
-    $bookCards = [
-        ['id'=>'book-stat-total',    'label'=>'Total Books',      'icon'=>'fa-book',                'cls'=>'stat-primary'],
-        ['id'=>'book-stat-available','label'=>'Available',        'icon'=>'fa-book-open',           'cls'=>'stat-success'],
-        ['id'=>'book-stat-borrowed', 'label'=>'Borrowed',         'icon'=>'fa-hand-holding-heart',  'cls'=>'stat-warning'],
-        ['id'=>'book-stat-overdue',  'label'=>'Overdue',          'icon'=>'fa-triangle-exclamation','cls'=>'stat-danger'],
-        ['id'=>'book-stat-today',    'label'=>"Today's Activity", 'icon'=>'fa-receipt',             'cls'=>'stat-info'],
-    ];
-    foreach ($bookCards as $c): ?>
-    <div class="col-6 col-lg">
-        <div class="stat-card <?= $c['cls'] ?>">
+    <div class="col-6 col-md-3">
+        <div class="stat-card stat-info">
             <div style="display:flex;justify-content:space-between;align-items:start;">
                 <div>
-                    <div class="stat-card-label"><?= $c['label'] ?></div>
-                    <div class="stat-card-value" id="<?= $c['id'] ?>">—</div>
+                    <div class="stat-card-label">Today's Activity</div>
+                    <div class="stat-card-value" id="book-stat-today">—</div>
                 </div>
-                <div class="stat-card-icon"><i class="fas <?= $c['icon'] ?>"></i></div>
+                <div class="stat-card-icon"><i class="fas fa-receipt"></i></div>
             </div>
         </div>
     </div>
-    <?php endforeach; ?>
 </div>
 
 <!-- Stat cards row 2 — Documents -->
@@ -114,9 +186,7 @@ $today    = date('l, F j, Y');
                 <span style="font-weight:600;font-size:.85rem;">Document Status</span>
             </div>
             <div class="card-body">
-                <div class="chart-container" style="height:180px;">
-                    <canvas id="completionTrendChart"></canvas>
-                </div>
+                <div class="chart-container" style="height:180px;"><canvas id="completionTrendChart"></canvas></div>
             </div>
         </div>
     </div>
@@ -126,9 +196,7 @@ $today    = date('l, F j, Y');
                 <span style="font-weight:600;font-size:.85rem;">Document Types</span>
             </div>
             <div class="card-body">
-                <div class="chart-container" style="height:180px;">
-                    <canvas id="categorySummaryChart"></canvas>
-                </div>
+                <div class="chart-container" style="height:180px;"><canvas id="categorySummaryChart"></canvas></div>
             </div>
         </div>
     </div>
@@ -161,7 +229,7 @@ $today    = date('l, F j, Y');
                 </button>
             </div>
             <div class="card-body p-0" style="max-height:260px;overflow-y:auto;">
-                <div id="announcements-container">
+                <div id="announcements-container-admin" class="announcements-container">
                     <div class="text-center text-muted py-4" style="font-size:.8rem;">
                         <i class="fas fa-spinner fa-spin me-1"></i> Loading...
                     </div>
@@ -188,51 +256,134 @@ $today    = date('l, F j, Y');
     </div>
 </div>
 
-<!-- Book Inventory -->
-<div class="card mb-2">
-    <div class="card-header">
-        <div style="display:flex;align-items:center;gap:8px;">
-            <i class="fas fa-book" style="color:var(--success);"></i>
-            <span style="font-weight:600;font-size:.85rem;">Book Inventory</span>
-            <button class="btn btn-primary btn-sm" onclick="openAddBookModal()">
-                <i class="fas fa-plus me-1"></i> Add
-            </button>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <div class="input-group input-group-sm" style="width:190px;">
-                <span class="input-group-text"><i class="fas fa-search" style="font-size:.68rem;"></i></span>
-                <input type="text" class="form-control" id="book-search-dashboard"
-                       placeholder="Search..." oninput="filterBooksTable()">
+<!-- Full book table removed from the dashboard — it duplicated the Inventory tab.
+     The Inventory summary card above gives at-a-glance health and links to the full module. -->
+
+<script>
+// ── Book inventory — category breakdown (single panel, links to Inventory) ────
+let _bcatData = [];
+const bcatEsc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function escHtml(s) { return bcatEsc(s); }
+
+function loadCategoryStats() {
+    return libApi('book_category_stats').then(r => {
+        _bcatData = (r.data || []).slice().sort((a, b) =>
+            parseInt(b.copies || b.total || 0) - parseInt(a.copies || a.total || 0));
+        renderCategoryList();
+        renderBcatBanner();
+    }).catch(() => {});
+}
+
+// ── Category list — each row navigates to the Inventory tab, pre-filtered ──────
+function renderCategoryList() {
+    const list = document.getElementById('bcatList');
+    const countEl = document.getElementById('bcat-count');
+    if (!list) return;
+
+    const q = (document.getElementById('bcat-search')?.value || '').toLowerCase().trim();
+    const cats = q ? _bcatData.filter(c => String(c.subject || '').toLowerCase().includes(q)) : _bcatData;
+
+    if (countEl) {
+        const n = _bcatData.length;
+        countEl.textContent = `· ${n} categor${n !== 1 ? 'ies' : 'y'}`;
+    }
+
+    if (!cats.length) {
+        list.innerHTML = `<div class="text-center text-muted py-4" style="font-size:.82rem;">
+            <i class="fas fa-folder-open me-1"></i> No categories match “${bcatEsc(q)}”.</div>`;
+        return;
+    }
+
+    list.innerHTML = cats.map(c => {
+        const idx    = _bcatData.indexOf(c);
+        const copies = parseInt(c.copies || c.total || 0);
+        const titles = parseInt(c.total || 0);
+        const avail  = parseInt(c.available || 0);
+        const pct    = copies > 0 ? Math.round((avail / copies) * 100) : 0;
+        const barCol = pct >= 50 ? 'var(--success,#10b981)' : (pct > 0 ? 'var(--warning,#f59e0b)' : 'var(--danger,#ef4444)');
+        return `
+        <div onclick="bcatGoto(${idx})" role="button" tabindex="0"
+             onkeydown="if(event.key==='Enter')bcatGoto(${idx})"
+             style="display:flex;align-items:center;gap:14px;padding:11px 12px;border-radius:9px;cursor:pointer;transition:background .12s;"
+             onmouseover="this.style.background='var(--bg,#f8fafc)'" onmouseout="this.style.background='transparent'">
+            <div style="min-width:130px;max-width:200px;">
+                <div style="font-size:.85rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${bcatEsc(c.subject || 'Uncategorized')}</div>
+                <div style="font-size:.66rem;color:var(--text-muted,#9ca3af);">${titles} title${titles !== 1 ? 's' : ''}</div>
             </div>
-            <select id="book-subject-filter" class="form-select form-select-sm"
-                    style="width:auto;" onchange="filterBooksTable()">
-                <option value="">All Subjects</option>
-            </select>
-        </div>
-    </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover mb-0">
-                <thead>
-                    <tr>
-                        <th>Title</th>
-                        <th>Subject</th>
-                        <th>Grade</th>
-                        <th>Location</th>
-                        <th>Available</th>
-                        <th>Condition</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="books-table-dashboard">
-                    <tr><td colspan="7" class="text-center text-muted py-4" style="font-size:.82rem;">
-                        <i class="fas fa-spinner fa-spin me-2"></i> Loading...
-                    </td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
+            <div style="flex:1;min-width:50px;height:7px;border-radius:99px;background:var(--border,#eef1f5);overflow:hidden;">
+                <div style="width:${pct}%;height:100%;background:${barCol};border-radius:99px;transition:width .5s;"></div>
+            </div>
+            <div style="font-size:.78rem;color:var(--text-muted,#6b7280);white-space:nowrap;font-variant-numeric:tabular-nums;">
+                <b style="color:var(--text);">${avail.toLocaleString()}</b> / ${copies.toLocaleString()} avail.
+            </div>
+            <i class="fas fa-chevron-right" style="color:#cbd5e1;font-size:.7rem;"></i>
+        </div>`;
+    }).join('');
+}
+
+// ── Navigate to Inventory tab, pre-filtered to the chosen category ────────────
+function bcatGoto(idx) {
+    const cat = _bcatData[idx];
+    const subject = cat ? (cat.subject || '') : '';
+    switchTabById('books');
+    setTimeout(() => {
+        const sel = document.getElementById('book-subject-filter-main');
+        if (sel) {
+            const hasOpt = [...sel.options].some(o => o.value === subject);
+            if (!hasOpt && subject) sel.add(new Option(subject, subject));
+            sel.value = subject;
+        }
+        if (typeof filterBooksMainTable === 'function') filterBooksMainTable();
+        else if (typeof renderBooksMainTable === 'function') renderBooksMainTable();
+    }, 300);
+}
+
+// ── Data-quality banner — surfaces the real problem behind a flat breakdown ────
+function renderBcatBanner() {
+    const el = document.getElementById('bcat-banner');
+    if (!el) return;
+    const totalCopies = _bcatData.reduce((s, c) => s + parseInt(c.copies || c.total || 0), 0);
+    const uncat = _bcatData.find(c => String(c.subject || '').toLowerCase() === 'uncategorized'
+                                   || !String(c.subject || '').trim());
+    const uncatCopies = uncat ? parseInt(uncat.copies || uncat.total || 0) : 0;
+    const share = totalCopies > 0 ? uncatCopies / totalCopies : 0;
+
+    if (share < 0.5 || uncatCopies === 0) { el.style.display = 'none'; return; }
+
+    <?php if (!empty($isStaff)): ?>
+    const actions = `
+        <button class="btn btn-sm" style="font-size:.72rem;padding:4px 10px;background:#fff;border:1px solid #fcd34d;color:#92400e;"
+                onclick="switchTabById('books')">
+            <i class="fas fa-wand-magic-sparkles me-1"></i>Categorize books
+        </button>`;
+    <?php else: ?>
+    const actions = '';
+    <?php endif; ?>
+
+    el.style.display = 'block';
+    el.innerHTML = `
+        <div style="display:flex;align-items:flex-start;gap:11px;padding:12px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;">
+            <i class="fas fa-tags" style="color:#d97706;font-size:1rem;margin-top:1px;flex-shrink:0;"></i>
+            <div style="flex:1;">
+                <div style="font-size:.8rem;color:#92400e;line-height:1.5;">
+                    <b>${Math.round(share * 100)}%</b> of copies (${uncatCopies.toLocaleString()}) are uncategorized${
+                        _bcatData.length === 1 ? ', and grade & location are unset' : ''}.
+                    Categorizing them turns this list into a useful breakdown.
+                </div>
+                ${actions ? `<div style="margin-top:9px;">${actions}</div>` : ''}
+            </div>
+        </div>`;
+}
+
+document.addEventListener('tabChanged', e => {
+    if (e.detail === 'dashboard') loadCategoryStats();
+});
+window.addEventListener('load', () => {
+    if (document.getElementById('dashboard')?.classList.contains('active')) {
+        loadCategoryStats();
+    }
+});
+</script>
 
 <?php else: ?>
 <!-- ════════════════════════════════════════════════
@@ -243,10 +394,10 @@ $today    = date('l, F j, Y');
 <div class="row g-3 mb-4">
     <?php
     $userActions = [
-        ['label'=>'Search Books',     'icon'=>'fa-magnifying-glass','color'=>'var(--primary)', 'bg'=>'var(--primary-light)', 'onclick'=>"switchTabById('books')"],
-        ['label'=>'Borrow a Book',    'icon'=>'fa-hand-holding',    'color'=>'var(--success)', 'bg'=>'var(--success-light)', 'onclick'=>"switchTabById('borrowing');setTimeout(()=>openBorrowRequestModal(),300)"],
-        ['label'=>'My Transactions',  'icon'=>'fa-list-check',      'color'=>'var(--warning)', 'bg'=>'var(--warning-light)', 'onclick'=>"switchTabById('borrowing')"],
-        ['label'=>'View Inventory',   'icon'=>'fa-book-open',       'color'=>'var(--info)',    'bg'=>'var(--info-light)',    'onclick'=>"switchTabById('books')"],
+        ['label'=>'Search Books',    'icon'=>'fa-magnifying-glass','color'=>'var(--primary)', 'bg'=>'var(--primary-light)', 'onclick'=>"switchTabById('books')"],
+        ['label'=>'Borrow a Book',   'icon'=>'fa-hand-holding',    'color'=>'var(--success)', 'bg'=>'var(--success-light)', 'onclick'=>"switchTabById('borrowing');setTimeout(()=>openBorrowRequestModal(),300)"],
+        ['label'=>'My Transactions', 'icon'=>'fa-list-check',      'color'=>'var(--warning)', 'bg'=>'var(--warning-light)', 'onclick'=>"switchTabById('borrowing')"],
+        ['label'=>'View Inventory',  'icon'=>'fa-book-open',       'color'=>'var(--info)',    'bg'=>'var(--info-light)',    'onclick'=>"switchTabById('books')"],
     ];
     foreach ($userActions as $qa): ?>
     <div class="col-6 col-md-3">
@@ -268,10 +419,8 @@ $today    = date('l, F j, Y');
     <div class="col-6 col-md-3">
         <div class="stat-card stat-primary">
             <div style="display:flex;justify-content:space-between;align-items:start;">
-                <div>
-                    <div class="stat-card-label">Borrowed Books</div>
-                    <div class="stat-card-value" id="user-stat-borrowed">—</div>
-                </div>
+                <div><div class="stat-card-label">Borrowed Books</div>
+                <div class="stat-card-value" id="user-stat-borrowed">—</div></div>
                 <div class="stat-card-icon"><i class="fas fa-book-reader"></i></div>
             </div>
         </div>
@@ -279,10 +428,8 @@ $today    = date('l, F j, Y');
     <div class="col-6 col-md-3">
         <div class="stat-card stat-warning">
             <div style="display:flex;justify-content:space-between;align-items:start;">
-                <div>
-                    <div class="stat-card-label">Due Soon</div>
-                    <div class="stat-card-value" id="user-stat-due">—</div>
-                </div>
+                <div><div class="stat-card-label">Due Soon</div>
+                <div class="stat-card-value" id="user-stat-due">—</div></div>
                 <div class="stat-card-icon"><i class="fas fa-clock"></i></div>
             </div>
         </div>
@@ -290,10 +437,8 @@ $today    = date('l, F j, Y');
     <div class="col-6 col-md-3">
         <div class="stat-card stat-danger">
             <div style="display:flex;justify-content:space-between;align-items:start;">
-                <div>
-                    <div class="stat-card-label">Overdue</div>
-                    <div class="stat-card-value" id="user-stat-overdue">—</div>
-                </div>
+                <div><div class="stat-card-label">Overdue</div>
+                <div class="stat-card-value" id="user-stat-overdue">—</div></div>
                 <div class="stat-card-icon"><i class="fas fa-triangle-exclamation"></i></div>
             </div>
         </div>
@@ -301,10 +446,8 @@ $today    = date('l, F j, Y');
     <div class="col-6 col-md-3">
         <div class="stat-card stat-success">
             <div style="display:flex;justify-content:space-between;align-items:start;">
-                <div>
-                    <div class="stat-card-label">Pending Requests</div>
-                    <div class="stat-card-value" id="user-stat-pending">—</div>
-                </div>
+                <div><div class="stat-card-label">Pending Requests</div>
+                <div class="stat-card-value" id="user-stat-pending">—</div></div>
                 <div class="stat-card-icon"><i class="fas fa-hourglass-half"></i></div>
             </div>
         </div>
@@ -335,7 +478,7 @@ $today    = date('l, F j, Y');
                 <span style="font-weight:600;font-size:.85rem;"><i class="fas fa-bullhorn me-2" style="color:var(--warning);"></i>Announcements</span>
             </div>
             <div class="card-body p-0" style="max-height:300px;overflow-y:auto;">
-                <div id="announcements-container">
+                <div id="announcements-container-user" class="announcements-container">
                     <div class="text-center text-muted py-4" style="font-size:.8rem;">
                         <i class="fas fa-spinner fa-spin me-1"></i> Loading...
                     </div>
@@ -369,12 +512,8 @@ $today    = date('l, F j, Y');
             <table class="table table-hover mb-0">
                 <thead>
                     <tr>
-                        <th>Title</th>
-                        <th>Subject</th>
-                        <th>Grade</th>
-                        <th>Location</th>
-                        <th>Available</th>
-                        <th>Condition</th>
+                        <th>Title</th><th>Subject</th><th>Grade</th>
+                        <th>Location</th><th>Available</th><th>Condition</th>
                     </tr>
                 </thead>
                 <tbody id="books-table-dashboard">

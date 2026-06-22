@@ -1,0 +1,72 @@
+name: E2E
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  e2e:
+    name: Borrow lifecycle (disposable MySQL)
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: library_sys
+          MYSQL_USER: lms_user
+          MYSQL_PASSWORD: lms_pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_NAME: library_sys
+      DB_USER: lms_user
+      DB_PASS: lms_pass
+      E2E_USER: admin@e2e.test
+      E2E_PASS: 'adminadmin!'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo, pdo_mysql, mbstring, curl
+          coverage: none
+
+      - name: Seed schema + admin (via PDO, no mysql client needed)
+        run: php tests/e2e/seed-admin.php
+
+      - name: Start the app (php built-in server)
+        run: |
+          php -S 127.0.0.1:8080 -t . > "$RUNNER_TEMP/php-server.log" 2>&1 &
+          echo "server PID $!"
+
+      - name: Wait for app health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health.php >/dev/null; then echo "app healthy"; break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/health.php
+
+      - name: Smoke test (auth + CSRF + catalog + pagination + aggregates)
+        run: php deploy/smoke-test.php http://127.0.0.1:8080 "$E2E_USER" "$E2E_PASS"
+
+      - name: Borrow lifecycle invariants
+        run: php tests/e2e/borrow_lifecycle.php http://127.0.0.1:8080 "$E2E_USER" "$E2E_PASS"
+
+      - name: Server log (on failure)
+        if: failure()
+        run: cat "$RUNNER_TEMP/php-server.log" || true
