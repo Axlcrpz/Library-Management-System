@@ -3863,7 +3863,7 @@ function handleExpireReservations(): void {
         sendError('Failed to run sweep: ' . dbgMsg($e), 500);
     }
 }
-// Fix 2: handleBookReports() was in the switch but never defined
+
 function handleBookReports(): void {
     global $pdo;
     try {
@@ -3915,9 +3915,6 @@ function handleBookReports(): void {
         sendError('Failed to load book reports: ' . dbgMsg($e), 500);
     }
 }
-
-// Fix 3: handleBorrowersSearch() and handleBorrowersAdd() belong in library_handler,
-//         not only in tnf_handler. These were missing from library_handler.php.
 
 function handleBorrowersSearch(): void {
     global $pdo;
@@ -4961,7 +4958,7 @@ function handleBorrowersGet(): void {
         $total = (int) $cnt->fetchColumn();
 
         $stmt = $pdo->prepare(
-            "SELECT b.id, b.name, b.borrower_type, b.lrn, b.contact, b.contact_person,
+            "SELECT b.id, b.user_id, b.name, b.borrower_type, b.lrn, b.contact, b.contact_person,
                     b.classification, b.email, b.address, b.created_at, b.updated_at,
                     COUNT(DISTINCT r.id) AS total_borrows,
                     SUM(CASE WHEN r.status = 'borrowed' THEN 1 ELSE 0 END) AS active_borrows,

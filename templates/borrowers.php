@@ -208,10 +208,19 @@ function renderBorrowerTable(rows) {
         const overdue = Number(b.overdue_count) > 0;
         const lrnBadge = b.lrn ? `<div style="font-size:.68rem;color:var(--primary);font-weight:600;">LRN: ${esc(b.lrn)}</div>` : '';
         const clsLabel = clsMap[b.classification] || esc(b.classification || '—');
+        const ini = esc((b.name || '?').trim().split(/\s+/).map(w => w[0] || '').slice(0, 2).join('').toUpperCase() || '?');
+        // Initials baseline (zero requests, never blank); for linked members lazily
+        // overlay the real avatar — cached, and only fetched when the row scrolls in.
+        const avatar = `<span style="position:relative;width:34px;height:34px;border-radius:50%;background:var(--primary-light);color:var(--primary);display:inline-flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:600;overflow:hidden;flex-shrink:0;">${ini}${b.user_id ? `<img src="api/library_handler.php?action=user_avatar&id=${encodeURIComponent(b.user_id)}" alt="" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" onerror="this.remove()">` : ''}</span>`;
         return `<tr>
             <td>
-                <div style="font-weight:600;font-size:.82rem;">${esc(b.name)}</div>
-                <div style="font-size:.7rem;color:var(--text-muted);">${esc(b.email || '')}</div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    ${avatar}
+                    <div style="min-width:0;">
+                        <div style="font-weight:600;font-size:.82rem;">${esc(b.name)}</div>
+                        <div style="font-size:.7rem;color:var(--text-muted);">${esc(b.email || '')}</div>
+                    </div>
+                </div>
             </td>
             <td>
                 ${lrnBadge}
