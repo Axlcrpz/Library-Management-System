@@ -1,8 +1,18 @@
 <!-- ── Inventory header ─────────────────────────────────────────────────────── -->
 <div class="page-header">
     <div>
-        <h1 class="page-title">Inventory</h1>
+        <h1 class="page-title"><?= !empty($isStaff) ? 'Inventory' : 'Inventory' ?></h1>
+        <?php if (empty($isStaff)): ?>
+        <p class="text-muted mb-0" style="font-size:.8rem;">Search or browse, click a book to see its details, then add it to your borrow cart.</p>
+        <?php endif; ?>
     </div>
+    <?php if (empty($isStaff)): ?>
+    <div class="page-actions">
+        <button class="btn btn-primary btn-sm" onclick="openBorrowCart()">
+            <i class="fas fa-basket-shopping me-1"></i> My Borrow Cart
+        </button>
+    </div>
+    <?php endif; ?>
     <?php if (!empty($isStaff)): ?>
     <div class="page-actions">
         <button class="btn btn-primary btn-sm" onclick="openBookDiscovery()">

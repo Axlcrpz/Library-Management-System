@@ -1,0 +1,3 @@
+# Archived, non-production code — deny ALL web access.
+# (AllowOverride All is enabled in the Dockerfile, so this is honored by Apache.)
+Require all denied

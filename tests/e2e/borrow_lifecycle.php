@@ -3,7 +3,7 @@
  * Borrow-lifecycle E2E — runs in CI against a disposable MySQL + a `php -S` instance
  * of the app. Asserts the core circulation invariants end-to-end:
  *   authentication · request (no stock change) · approval (stock decrement) ·
- *   due-date assignment · return (stock restoration) · overdue fine accrual ·
+ *   due-date assignment · return (stock restoration) · overdue return completion ·
  *   insufficient-stock guard. Cleans up its own test data; exits non-zero on the
  *   first violated invariant.
  *
@@ -106,7 +106,7 @@ $ret = api($base, $jar, $csrf, 'book_borrow_return', [
 ok(($ret['success'] ?? false), 'process return', $ret['message'] ?? '');
 ok(availableOf($base, $jar, $bookId, $tag) === 5, 'INVARIANT: return restores stock (3 → 5)');
 
-// ── Fine path: an overdue return must accrue a fine ──
+// ── Overdue path: an overdue return still completes cleanly (fines retired v1.1) ──
 $tag2  = $tag . ' B';
 $add2  = api($base, $jar, $csrf, 'books_add', ['title' => $tag2, 'quantity_total' => 1, 'quantity_available' => 1]);
 $book2 = (int) ($add2['data']['id'] ?? 0);
@@ -117,7 +117,8 @@ $borrow2 = (int) ($req2['data']['id'] ?? 0);
 api($base, $jar, $csrf, 'book_borrow_approve', ['id' => $borrow2, 'due_at' => date('Y-m-d H:i:s', strtotime('-3 days'))]);
 api($base, $jar, $csrf, 'book_borrow_return', ['id' => $borrow2, 'items' => [['book_id' => $book2, 'returned_quantity' => 1]]]);
 $rec2 = findRecord($base, $jar, $borrow2);
-ok($rec2 && (float) ($rec2['fine_amount'] ?? 0) > 0, 'INVARIANT: overdue return accrues a fine', 'fine=' . ($rec2['fine_amount'] ?? 'null'));
+ok($rec2 && ($rec2['status'] ?? '') === 'returned' && !empty($rec2['returned_at']),
+   'INVARIANT: overdue return completes with status=returned', $rec2['status'] ?? 'none');
 
 // ── Guard: approval must be blocked when stock is insufficient ──
 $req3    = api($base, $jar, $csrf, 'book_borrow_request_add', [

@@ -2,6 +2,7 @@
 ob_start();
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/lib/Mailer.php';
 
 if (is_logged_in()) { header('Location: index.php'); exit; }
 
@@ -9,16 +10,33 @@ define('PROFILE_DIR',  __DIR__ . '/storage/profiles/');
 define('PROFILE_PATH', 'storage/profiles/');
 
 // ── Auto-migrate: add identity columns if not present ─────────────────────────
+// Best-effort: a migration hiccup must never take the login page down — the app
+// self-heals fully on the next API request (ensureLibrarySchema owns the schema).
 (function(PDO $pdo): void {
+    try {
+    // Guarantee the users table on databases initialized without deploy/seed.sql
+    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(255) NOT NULL UNIQUE,
+        password VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255) NULL,
+        role VARCHAR(20) NOT NULL DEFAULT 'viewer',
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        classification VARCHAR(50) NOT NULL DEFAULT 'individual',
+        contact VARCHAR(50) NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     $cols = [];
     foreach ($pdo->query('SHOW COLUMNS FROM users') as $r) $cols[$r['Field']] = true;
     foreach ([
-        'lrn'            => "VARCHAR(12)  NULL",
-        'school_name'    => "VARCHAR(255) NULL",
-        'grade_level'    => "VARCHAR(100) NULL",
-        'contact'        => "VARCHAR(50)  NULL",
-        'profile_image'  => "VARCHAR(500) NULL",
-        'classification' => "VARCHAR(20)  NOT NULL DEFAULT 'personal'",
+        'lrn'              => "VARCHAR(12)  NULL",
+        'school_name'      => "VARCHAR(255) NULL",
+        'grade_level'      => "VARCHAR(100) NULL",
+        'contact'          => "VARCHAR(50)  NULL",
+        'profile_image'    => "VARCHAR(500) NULL",
+        'classification'   => "VARCHAR(20)  NOT NULL DEFAULT 'personal'",
+        'institutional_id' => "VARCHAR(50)  NULL",
     ] as $col => $def) {
         if (isset($cols[$col])) continue;
         try { $pdo->exec("ALTER TABLE users ADD COLUMN `$col` $def"); } catch (Throwable) {}
@@ -49,6 +67,9 @@ define('PROFILE_PATH', 'storage/profiles/');
             INDEX idx_la_lookup (username, ip, attempted_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     } catch (Throwable) {}
+    } catch (Throwable $e) {
+        error_log('[library_sys] login auto-migrate skipped: ' . $e->getMessage());
+    }
 })($pdo);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -62,6 +83,87 @@ function isDepEdEmail(string $email): bool {
 
 function generateOtp(): string {
     return str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Validate the institutional ID for the chosen account type.
+ * Returns an error message, or '' when the ID is acceptable.
+ *   school       → official 6-digit DepEd School ID, unique in the system
+ *   child/teen   → 12-digit Student ID Number (LRN format)
+ *   everyone else→ Employee/Institutional ID in the organisation's own format
+ *                  (lengths vary between institutions — no fixed digit count)
+ */
+function validateInstitutionalId(PDO $pdo, string $classification, string $id): string {
+    switch ($classification) {
+        case 'school':
+            if (!preg_match('/^\d{6}$/', $id)) {
+                return 'DepEd School ID must contain exactly 6 digits.';
+            }
+            $chk = $pdo->prepare("SELECT id FROM users WHERE institutional_id = ? AND classification = 'school' LIMIT 1");
+            $chk->execute([$id]);
+            if ($chk->fetch()) {
+                return 'That DepEd School ID is already registered. Please sign in instead, or contact the library.';
+            }
+            return '';
+        case 'child':
+        case 'teen':
+            return preg_match('/^\d{12}$/', $id) ? '' : 'Student ID Number must contain exactly 12 digits.';
+        default:
+            // Employee / institutional formats vary — require something plausible,
+            // not a fixed length: 3–30 chars of letters, digits, dash, slash, dot.
+            return preg_match('/^[A-Za-z0-9][A-Za-z0-9\-\/\. ]{2,29}$/', trim($id))
+                ? '' : 'Please enter a valid Employee ID Number.';
+    }
+}
+
+/**
+ * Email the 6-digit verification code. Returns true only when the SMTP
+ * server accepted the message; failures are logged server-side and must
+ * be surfaced to the user honestly (never claim "code sent" on failure).
+ */
+function sendVerificationEmail(PDO $pdo, string $email, string $name, string $otp): bool {
+    try {
+        $mailer = \Lib\Mailer::fromConfig($pdo);
+        if (!$mailer->isConfigured()) {
+            error_log('[library_sys] OTP email not sent: SMTP is not configured. '
+                . 'Set SMTP_* environment variables or configure it in Settings → Notifications.');
+            return false;
+        }
+        $safeName = htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
+        $digits   = implode('', array_map(
+            fn($d) => '<span style="display:inline-block;width:34px;padding:10px 0;margin:0 3px;background:#f0f4ff;'
+                    . 'border:1px solid #c7d4f5;border-radius:8px;font-size:22px;font-weight:700;color:#003087;">' . $d . '</span>',
+            str_split($otp)
+        ));
+        $html = '
+<div style="margin:0;padding:24px;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <div style="background:#003087;padding:22px 28px;">
+      <div style="color:#ffffff;font-size:17px;font-weight:700;">SDO Quirino Library Management System</div>
+      <div style="color:rgba(255,255,255,.65);font-size:12px;margin-top:2px;">Schools Division Office of Quirino &middot; Department of Education</div>
+    </div>
+    <div style="padding:28px;">
+      <p style="font-size:14px;color:#111827;margin:0 0 6px;">Hi ' . $safeName . ',</p>
+      <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 20px;">
+        Use the verification code below to finish creating your library account.
+        This code expires in <strong>15 minutes</strong>.</p>
+      <div style="text-align:center;margin:0 0 20px;">' . $digits . '</div>
+      <p style="font-size:12px;color:#6b7280;line-height:1.6;margin:0;">
+        If you did not request this, you can safely ignore this email &mdash; no account will be created.</p>
+    </div>
+    <div style="padding:14px 28px;background:#f9fafb;border-top:1px solid #f3f4f6;font-size:11px;color:#9ca3af;">
+      This is an automated message from the SDO Quirino Library Management System. Please do not reply.</div>
+  </div>
+</div>';
+        $text = "Hi {$name},\n\nYour SDO Quirino Library verification code is: {$otp}\n"
+              . "This code expires in 15 minutes.\n\n"
+              . "If you did not request this, you can safely ignore this email.";
+        $mailer->send($email, $name, 'Your verification code — SDO Quirino Library', $html, $text);
+        return true;
+    } catch (Throwable $e) {
+        error_log('[library_sys] OTP email to ' . $email . ' failed: ' . $e->getMessage());
+        return false;
+    }
 }
 
 function saveProfileImage(): ?string {
@@ -147,6 +249,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $classification = in_array($_POST['classification'] ?? '', $allowedClassifications, true)
             ? ($_POST['classification'])
             : 'individual';
+        $institutionalId = trim($_POST['institutional_id'] ?? '');
+        $instIdError     = $isDeped ? '' : (
+            $institutionalId === ''
+                ? 'Please enter your institutional ID number — it is required for identity verification.'
+                : validateInstitutionalId($pdo, $classification, $institutionalId)
+        );
 
         if (!$fullName || !$email || !$password || !$confirm) {
             $message = 'Please fill in all required fields.';
@@ -160,6 +268,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = 'DepEd accounts require a valid 12-digit School LRN.';
         } elseif ($isDeped && !$schoolName) {
             $message = 'Please enter your school or institution name.';
+        } elseif ($instIdError !== '') {
+            $message = $instIdError;
         } else {
             $chkEmail = $pdo->prepare('SELECT id FROM users WHERE username = ? LIMIT 1');
             $chkEmail->execute([$email]);
@@ -215,20 +325,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 } else {
                     $otp = generateOtp();
-                    $_SESSION['_otp_pending'] = [
-                        'email'          => $email,
-                        'password'       => $hash,
-                        'full_name'      => $fullName,
-                        'contact'        => $contact,
-                        'profile_image'  => $img,
-                        'classification' => $classification,
-                        'otp'            => $otp,
-                        'expires'        => time() + 900,
-                    ];
-                    $_SESSION['_dev_otp'] = $otp;
-                    $message     = 'A 6-digit code was sent to <strong>' . htmlspecialchars($email) . '</strong>. Enter it below to continue.';
-                    $messageType = 'success';
-                    $mode        = 'otp';
+                    if (!sendVerificationEmail($pdo, $email, $fullName, $otp)) {
+                        $message = 'We couldn\'t send the verification email right now. Please try again in a few minutes, '
+                                 . 'or contact the library administrator if the problem continues.';
+                        $mode    = 'register';
+                    } else {
+                        $_SESSION['_otp_pending'] = [
+                            'email'            => $email,
+                            'password'         => $hash,
+                            'full_name'        => $fullName,
+                            'contact'          => $contact,
+                            'profile_image'    => $img,
+                            'classification'   => $classification,
+                            'institutional_id' => $institutionalId,
+                            'otp'              => $otp,
+                            'expires'          => time() + 900,
+                            'attempts'         => 0,
+                            'last_sent'        => time(),
+                        ];
+                        $message     = 'A 6-digit code was sent to <strong>' . htmlspecialchars($email) . '</strong>. Enter it below to continue.';
+                        $messageType = 'success';
+                        $mode        = 'otp';
+                    }
                 }
             }
         }
@@ -243,23 +361,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = 'Session expired. Please register again.';
             $mode    = 'register';
         } elseif (time() > $pending['expires']) {
-            unset($_SESSION['_otp_pending'], $_SESSION['_dev_otp']);
+            unset($_SESSION['_otp_pending']);
             $message = 'Code expired. Please register again.';
             $mode    = 'register';
-        } elseif ($entered !== $pending['otp']) {
-            $message = 'Incorrect code. Please try again.';
+        } elseif (($pending['attempts'] ?? 0) >= 5) {
+            unset($_SESSION['_otp_pending']);
+            $message = 'Too many incorrect attempts. Please register again to receive a new code.';
+            $mode    = 'register';
+        } elseif (!hash_equals((string) $pending['otp'], $entered)) {
+            $_SESSION['_otp_pending']['attempts'] = ($pending['attempts'] ?? 0) + 1;
+            $left    = 5 - $_SESSION['_otp_pending']['attempts'];
+            $message = $left > 0
+                ? 'Incorrect code. ' . $left . ' attempt' . ($left === 1 ? '' : 's') . ' remaining.'
+                : 'Incorrect code. That was your last attempt — please register again.';
             $mode    = 'otp';
         } else {
             try {
                 $pdo->prepare("
                     INSERT INTO users
                       (username, password, full_name, role, status, is_active,
-                       contact, profile_image, classification)
-                    VALUES (?, ?, ?, 'viewer', 'pending', 0, ?, ?, ?)
+                       contact, profile_image, classification, institutional_id)
+                    VALUES (?, ?, ?, 'viewer', 'pending', 0, ?, ?, ?, ?)
                 ")->execute([$pending['email'], $pending['password'], $pending['full_name'],
                     $pending['contact'] ?? null, $pending['profile_image'] ?? null,
-                    $pending['classification'] ?? 'individual']);
-                unset($_SESSION['_otp_pending'], $_SESSION['_dev_otp']);
+                    $pending['classification'] ?? 'individual',
+                    $pending['institutional_id'] ?: null]);
+                unset($_SESSION['_otp_pending']);
                 $message     = 'Email verified! Your account is now awaiting admin approval.';
                 $messageType = 'success';
                 $mode        = 'login';
@@ -272,15 +399,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // RESEND OTP
     elseif ($mode === 'resend_otp') {
-        if (!empty($_SESSION['_otp_pending'])) {
+        $pending = $_SESSION['_otp_pending'] ?? null;
+        if (!$pending) {
+            $message = 'Session expired. Please register again.';
+            $mode    = 'register';
+        } elseif (time() - (int) ($pending['last_sent'] ?? 0) < 60) {
+            $wait        = 60 - (time() - (int) ($pending['last_sent'] ?? 0));
+            $message     = 'Please wait ' . $wait . ' seconds before requesting another code.';
+            $mode        = 'otp';
+        } else {
             $otp = generateOtp();
-            $_SESSION['_otp_pending']['otp']    = $otp;
-            $_SESSION['_otp_pending']['expires'] = time() + 900;
-            $_SESSION['_dev_otp'] = $otp;
-            $message     = 'A new code has been sent.';
-            $messageType = 'success';
+            if (sendVerificationEmail($pdo, $pending['email'], $pending['full_name'], $otp)) {
+                $_SESSION['_otp_pending']['otp']       = $otp;
+                $_SESSION['_otp_pending']['expires']   = time() + 900;
+                $_SESSION['_otp_pending']['attempts']  = 0;
+                $_SESSION['_otp_pending']['last_sent'] = time();
+                $message     = 'A new code has been sent to <strong>' . htmlspecialchars($pending['email']) . '</strong>.';
+                $messageType = 'success';
+            } else {
+                $message = 'We couldn\'t send a new code right now. Please try again in a few minutes.';
+            }
+            $mode = 'otp';
         }
-        $mode = 'otp';
     }
 }
 
@@ -320,18 +460,18 @@ body{display:flex;min-height:100vh}
 .bpc2{width:180px;height:180px;top:60px;right:60px;background:rgba(232,119,34,.07)}
 .bpc3{width:90px;height:90px;bottom:140px;right:40px;background:rgba(255,255,255,.04)}
 .bc{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;max-width:480px;width:100%;}
-.logos{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;margin-bottom:36px;}
-.logo-wrap{width:110px;height:110px;display:flex;align-items:center;justify-content:center;}
-.logo-img{max-width:85px;max-height:85px;width:auto;height:auto;object-fit:contain;display:block;}
+.logos{display:flex;align-items:center;justify-content:center;gap:22px;margin-bottom:34px;}
+.logo-wrap{width:112px;height:112px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:50%;box-shadow:0 8px 28px rgba(0,0,0,.18);}
+.logo-img{max-width:88px;max-height:88px;width:auto;height:auto;object-fit:contain;display:block;transition:transform .2s ease;}
 .logo-img:hover{transform:scale(1.05);}
-.ldiv{width:1px;height:50px;background:linear-gradient(to bottom,transparent,rgba(255,255,255,.25),transparent);margin:0 4px;}
+.ldiv{width:1px;height:64px;background:linear-gradient(to bottom,transparent,rgba(255,255,255,.3),transparent);}
 .bflag{display:inline-flex;align-items:center;gap:8px;background:rgba(232,119,34,.2);border:1px solid rgba(232,119,34,.4);border-radius:99px;padding:5px 14px;margin-bottom:18px;}
 .bdot{width:7px;height:7px;border-radius:50%;background:var(--orange);animation:pulse 2s ease infinite;}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(.85)}}
 .bflag span{font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--orange)}
-.btitle{font-size:1.7rem;font-weight:700;color:#fff;line-height:1.25;letter-spacing:-.02em;margin-bottom:10px}
+.btitle{font-size:1.85rem;font-weight:700;color:#fff;line-height:1.22;letter-spacing:-.02em;margin-bottom:12px}
 .btitle .ac{color:var(--orange)}
-.bsub{font-size:.83rem;color:rgba(255,255,255,.6);line-height:1.65;margin-bottom:36px;max-width:360px}
+.bsub{font-size:.84rem;color:rgba(255,255,255,.62);line-height:1.7;margin-bottom:36px;max-width:380px}
 .fpills{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-bottom:36px}
 .fpill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:6px 14px;font-size:.72rem;font-weight:500;color:rgba(255,255,255,.8);}
 .fpill i{color:var(--orange);font-size:.7rem}
@@ -407,11 +547,8 @@ body{display:flex;min-height:100vh}
     <div class="bpc bpc3"></div>
     <div class="bc">
       <div class="logos">
-        <div class="logo-wrap"><img src="assets/img/quirino-logo.png" alt="Lalawigan ng Quirino" class="logo-img"></div>
         <div class="ldiv"></div>
         <div class="logo-wrap"><img src="assets/img/sdo-logo.png" alt="SDO Quirino" class="logo-img"></div>
-        <div class="ldiv"></div>
-        <div class="logo-wrap"><img src="assets/img/bagong-pilipinas.png" alt="Bagong Pilipinas" class="logo-img"></div>
       </div>
       <div class="bflag"><div class="bdot"></div><span>DepEd &mdash; Schools Division of Quirino</span></div>
       <h1 class="btitle">Library Management<br><span class="ac">System</span></h1>
@@ -441,7 +578,7 @@ body{display:flex;min-height:100vh}
     <div class="av <?= (!$showRegister && !$showOtp) ? 'active' : '' ?>" id="view-login">
       <div class="fhdr">
         <div class="fey">Secure Access</div>
-        <h2 class="ftitle">Welcome back</h2>
+        <h2 class="ftitle">Welcome</h2>
         <p class="fsub">Sign in to your library account to continue.</p>
       </div>
       <form method="post" autocomplete="on">
@@ -644,12 +781,97 @@ body{display:flex;min-height:100vh}
           <!-- Hidden actual field -->
           <input type="hidden" id="r-classification" name="classification" value="individual">
           <div id="cls-hint" style="font-size:.72rem;color:#6b7280;padding:6px 10px;border-radius:7px;background:#f9fafb;border:1px solid #f3f4f6;display:none;"></div>
+
+          <!-- Institutional ID — label/placeholder/rules follow the account type -->
+          <div class="fg" style="margin-top:12px;margin-bottom:0;">
+            <label for="r-instid" id="instid-label" style="font-size:.75rem;font-weight:600;color:#374151;">
+              Institutional ID Number <span style="color:#ef4444">*</span>
+            </label>
+            <div class="iw">
+              <i class="fas fa-id-badge ii"></i>
+              <input class="fi" type="text" id="r-instid" name="institutional_id"
+                     placeholder="Your official ID number" maxlength="30" autocomplete="off"
+                     oninput="instIdInput(this)">
+            </div>
+            <div id="instid-msg" style="font-size:.7rem;min-height:15px;margin-top:3px;"></div>
+          </div>
         </div>
         <style>
           .cls-card.selected{border-color:var(--blue)!important;background:#f0f4ff!important;}
           .cls-card:hover:not(.selected){border-color:#d1d5db!important;background:#f9fafb!important;}
         </style>
         <script>
+        // ── Institutional ID rules per account type ─────────────────────────────
+        // school      → official 6-digit DepEd School ID (numbers only, unique)
+        // child/teen  → 12-digit Student ID Number (numbers only)
+        // others      → Employee/Institutional ID in the organisation's own format
+        const INST_ID_RULES = {
+          school: {
+            label: 'DepEd School ID', placeholder: 'e.g. 104300', digitsOnly: true, maxlen: 6,
+            hint: 'The school’s official 6-digit DepEd School ID.',
+            test: v => /^\d{6}$/.test(v), error: 'DepEd School ID must contain exactly 6 digits.',
+          },
+          child: {
+            label: 'Student ID Number', placeholder: 'e.g. 202512345678', digitsOnly: true, maxlen: 12,
+            hint: 'The learner’s official 12-digit Student ID Number.',
+            test: v => /^\d{12}$/.test(v), error: 'Student ID Number must contain exactly 12 digits.',
+          },
+          teen: {
+            label: 'Student ID Number', placeholder: 'e.g. 202512345678', digitsOnly: true, maxlen: 12,
+            hint: 'The learner’s official 12-digit Student ID Number.',
+            test: v => /^\d{12}$/.test(v), error: 'Student ID Number must contain exactly 12 digits.',
+          },
+          individual: {
+            label: 'Employee ID Number', placeholder: 'Your official employee ID', digitsOnly: false, maxlen: 30,
+            hint: 'Your official Employee ID as issued by your institution (formats vary).',
+            test: v => /^[A-Za-z0-9][A-Za-z0-9\-\/\. ]{2,29}$/.test(v.trim()), error: 'Please enter a valid Employee ID Number.',
+          },
+          professional: {
+            label: 'Employee ID Number', placeholder: 'Your official employee ID', digitsOnly: false, maxlen: 30,
+            hint: 'Your official Employee ID as issued by your institution (formats vary).',
+            test: v => /^[A-Za-z0-9][A-Za-z0-9\-\/\. ]{2,29}$/.test(v.trim()), error: 'Please enter a valid Employee ID Number.',
+          },
+          private_institution: {
+            label: 'Institutional ID Number', placeholder: 'Your organization’s official ID', digitsOnly: false, maxlen: 30,
+            hint: 'Your organization’s official identification / registration number.',
+            test: v => /^[A-Za-z0-9][A-Za-z0-9\-\/\. ]{2,29}$/.test(v.trim()), error: 'Please enter a valid Institutional ID Number.',
+          },
+        };
+        function instIdRule() {
+          return INST_ID_RULES[document.getElementById('r-classification')?.value] || INST_ID_RULES.individual;
+        }
+        function updateInstIdField() {
+          const r = instIdRule();
+          const label = document.getElementById('instid-label');
+          const input = document.getElementById('r-instid');
+          if (label) label.innerHTML = r.label + ' <span style="color:#ef4444">*</span>';
+          if (input) {
+            input.placeholder = r.placeholder;
+            input.maxLength = r.maxlen;
+            input.inputMode = r.digitsOnly ? 'numeric' : 'text';
+            if (r.digitsOnly) input.value = input.value.replace(/\D/g, '').slice(0, r.maxlen);
+            instIdValidate(input.value, false);
+          }
+          const msg = document.getElementById('instid-msg');
+          if (msg && !input.value) { msg.style.color = '#6b7280'; msg.textContent = r.hint; }
+        }
+        function instIdInput(el) {
+          const r = instIdRule();
+          if (r.digitsOnly) el.value = el.value.replace(/\D/g, '').slice(0, r.maxlen);
+          instIdValidate(el.value, true);
+        }
+        function instIdValidate(v, showOk) {
+          const r = instIdRule();
+          const msg = document.getElementById('instid-msg');
+          if (!msg) return !!v && r.test(v);
+          if (!v) { msg.style.color = '#6b7280'; msg.textContent = r.hint; return false; }
+          if (r.test(v)) {
+            if (showOk) { msg.style.color = '#15803d'; msg.innerHTML = '<i class="fas fa-circle-check" style="margin-right:4px;"></i>Looks good.'; }
+            return true;
+          }
+          msg.style.color = '#b91c1c'; msg.textContent = r.error;
+          return false;
+        }
         (function(){
           const hints={
             child:     '🌟 Fun, colorful interface with learning activities!',
@@ -667,10 +889,12 @@ body{display:flex;min-height:100vh}
               const h=document.getElementById('cls-hint');
               h.textContent=hints[this.dataset.cls]||'';
               h.style.display='block';
+              updateInstIdField();
             });
           });
           // Default selection
           document.querySelector('.cls-card[data-cls="individual"]')?.classList.add('selected');
+          updateInstIdField();
         })();
         </script>
 
@@ -712,13 +936,6 @@ body{display:flex;min-height:100vh}
         <h2 class="ftitle">Check your email</h2>
         <p class="fsub">Enter the 6-digit code sent to your email address.</p>
       </div>
-      <?php if (isset($_SESSION['_dev_otp']) && in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true)): ?>
-      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:.78rem;color:#92400e;margin-bottom:16px;">
-        <i class="fas fa-flask" style="margin-right:5px;"></i>
-        <strong>Dev mode — OTP:</strong> <?= htmlspecialchars($_SESSION['_dev_otp']) ?>
-        <small style="display:block;margin-top:2px;opacity:.7;">Remove this block in production after SMTP is configured.</small>
-      </div>
-      <?php endif; ?>
       <form method="post" id="otpForm">
         <input type="hidden" name="mode" value="verify_otp">
         <input type="hidden" name="otp" id="otpHidden">
@@ -834,7 +1051,16 @@ function previewPhoto(input) {
 // ── Register validation (client-side) ────────────────────────────────────────
 function validateRegister() {
   const email = (document.getElementById('r-email')?.value || '').trim();
-  if (!isDepEd(email)) return true;
+  if (!isDepEd(email)) {
+    // Personal-email accounts must supply a valid institutional ID for the
+    // selected account type (server re-validates authoritatively).
+    const idInput = document.getElementById('r-instid');
+    if (!instIdValidate(idInput?.value || '', true)) {
+      idInput?.focus();
+      return false;
+    }
+    return true;
+  }
 
   const lrn = (document.getElementById('r-lrn')?.value || '').replace(/\D/g,'');
   if (lrn.length !== 12) {

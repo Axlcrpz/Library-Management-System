@@ -1,8 +1,8 @@
 <?php
 require_once __DIR__ . '/../auth.php';
 require_once __DIR__ . '/../config/database.php';
-require_once __DIR__ . '/../lib/Fines.php';
 require_once __DIR__ . '/../lib/DueDate.php';
+require_once __DIR__ . '/../lib/Mailer.php';
 
 // Flip to true only for local debugging. In production, internal error details
 // (DB messages, paths) are never sent to the client — they'd leak system internals.
@@ -30,7 +30,7 @@ const AVATAR_UPLOAD_DIR    = __DIR__ . '/../storage/attachments/avatars/';   // 
 const AVATAR_LIB_DIR       = __DIR__ . '/../assets/img/avatars/';            // curated static library
 const AVATAR_LIB_PATH      = 'assets/img/avatars/';
 const AVATAR_CATEGORIES    = ['neutral', 'professional', 'teen', 'child'];
-const AVATAR_UPLOAD_COOLDOWN_DAYS = 30;
+const AVATAR_UPLOAD_COOLDOWN_DAYS = 0;
 const DISCOVERY_RATE_LIMIT = 40;   // external API calls per provider per minute
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB
 const ALLOWED_MIME_TYPES = [
@@ -43,8 +43,12 @@ const ALLOWED_MIME_TYPES = [
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     'application/vnd.ms-powerpoint',
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp',
+    'application/zip', 'application/x-zip-compressed',
 ];
-const ALLOWED_EXTENSIONS = ['pdf','xlsx','xls','csv','txt','docx','doc','pptx','ppt','jpg','jpeg','png','gif','webp','bmp'];
+const ALLOWED_EXTENSIONS = ['pdf','xlsx','xls','csv','txt','docx','doc','pptx','ppt','jpg','jpeg','png','gif','webp','bmp','zip'];
+// Must be declared BEFORE the action dispatch below: handlers exit mid-switch, so
+// a top-level const placed after the switch is never defined when a handler runs.
+const ANNOUNCEMENT_CATEGORIES = ['general','urgent','event','academic','library','memorandum'];
 
 function sendJson(array $payload, int $status = 200): void {
     http_response_code($status);
@@ -120,7 +124,10 @@ function ensureLibrarySchema(PDO $pdo): void {
     // Short-circuit: skip all DDL if schema is already at current version
     try {
         $v = $pdo->query("SELECT setting_value FROM library_settings WHERE setting_key = 'schema_version'")->fetchColumn();
-        if ($v === '13') return;
+        // v14: adds smtp_* defaults to library_settings (email verification, LMS v1.1)
+        // v15: adds users.institutional_id (registration identity verification, LMS v1.1)
+        // v16: adds deliveries.delivered_by (delivery log redesign, LMS v1.1)
+        if ($v === '16') return;
     } catch (Throwable) {}
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS library_documents (
@@ -306,10 +313,10 @@ function ensureLibrarySchema(PDO $pdo): void {
         $borrowerColumns[$row['Field']] = true;
     }
     if (!isset($borrowerColumns['contact'])) {
-        $pdo->exec('ALTER TABLE library_borrowers ADD COLUMN contact VARCHAR(255) NULL AFTER name');
+        try { $pdo->exec('ALTER TABLE library_borrowers ADD COLUMN contact VARCHAR(255) NULL AFTER name'); } catch (Throwable) {}
     }
     if (!isset($borrowerColumns['created_at'])) {
-        $pdo->exec('ALTER TABLE library_borrowers ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP');
+        try { $pdo->exec('ALTER TABLE library_borrowers ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP'); } catch (Throwable) {}
     }
 
     $borrowRecordColumns = [];
@@ -326,7 +333,7 @@ function ensureLibrarySchema(PDO $pdo): void {
     ];
     foreach ($borrowRecordRequired as $name => $definition) {
         if (!isset($borrowRecordColumns[$name])) {
-            $pdo->exec("ALTER TABLE library_borrowing_records ADD COLUMN {$name} {$definition}");
+            try { $pdo->exec("ALTER TABLE library_borrowing_records ADD COLUMN {$name} {$definition}"); } catch (Throwable) {}
         }
     }
 
@@ -353,11 +360,11 @@ function ensureLibrarySchema(PDO $pdo): void {
     ];
     foreach ($versionRequired as $name => $definition) {
         if (!isset($versionColumns[$name])) {
-            $pdo->exec("ALTER TABLE library_document_versions ADD COLUMN {$name} {$definition}");
+            try { $pdo->exec("ALTER TABLE library_document_versions ADD COLUMN {$name} {$definition}"); } catch (Throwable) {}
         }
     }
     if (isset($versionColumns['version_no']) && !isset($versionColumns['version_number'])) {
-        $pdo->exec('ALTER TABLE library_document_versions CHANGE version_no version_number INT NOT NULL DEFAULT 1');
+        try { $pdo->exec('ALTER TABLE library_document_versions CHANGE version_no version_number INT NOT NULL DEFAULT 1'); } catch (Throwable) {}
     }
     try {
         $pdo->exec('ALTER TABLE library_document_versions MODIFY file_path VARCHAR(500) NULL');
@@ -384,10 +391,12 @@ function ensureLibrarySchema(PDO $pdo): void {
 
     foreach ($required as $name => $definition) {
         if (!isset($columns[$name])) {
-            $pdo->exec("ALTER TABLE library_documents ADD COLUMN {$name} {$definition}");
+            try { $pdo->exec("ALTER TABLE library_documents ADD COLUMN {$name} {$definition}"); } catch (Throwable) {}
         }
     }
-    $pdo->exec('UPDATE library_documents SET deleted_at = COALESCE(updated_at, NOW()) WHERE COALESCE(is_deleted, 0) = 1 AND deleted_at IS NULL');
+    try {
+        $pdo->exec('UPDATE library_documents SET deleted_at = COALESCE(updated_at, NOW()) WHERE COALESCE(is_deleted, 0) = 1 AND deleted_at IS NULL');
+    } catch (Throwable) {}
 
     // ── Extended books columns ──────────────────────────────────────────────
     $booksColumns = [];
@@ -474,7 +483,6 @@ function ensureLibrarySchema(PDO $pdo): void {
 
     // ── Expanded library_settings defaults ──────────────────────────────────
     $settingsDefaults = [
-        'fine_per_day'           => '5',
         'max_borrow_days'        => '14',
         'max_books_per_borrow'   => '5',
         'library_name'           => 'SDO Quirino Library',
@@ -483,9 +491,15 @@ function ensureLibrarySchema(PDO $pdo): void {
         'sms_enabled'            => '0',
         'sms_api_key'            => '',
         'sms_sender_name'        => 'LIBRARY',
-        'sms_overdue_message'    => 'Dear {name}, your borrowed book "{book}" is overdue. Please return it. Fine: PHP {fine}.',
+        'smtp_host'              => 'smtp.gmail.com',
+        'smtp_port'              => '587',
+        'smtp_secure'            => 'tls',
+        'smtp_user'              => '',
+        'smtp_pass'              => '',
+        'smtp_from_email'        => '',
+        'smtp_from_name'         => 'SDO Quirino Library',
+        'sms_overdue_message'    => 'Dear {name}, your borrowed book "{book}" is overdue. Please return it. Thank you.',
         'sms_borrow_message'     => 'Dear {name}, you borrowed "{book}". Due: {due}. Thank you.',
-        'auto_fine_enabled'      => '1',
         'reservation_expiry_days'=> '3',
         'notify_borrow'          => '1',
         'notify_overdue'         => '1',
@@ -553,7 +567,32 @@ function ensureLibrarySchema(PDO $pdo): void {
         $insertSetting->execute([$k, $v]);
     }
 
-    // ── users column migrations ────────────────────────────────────────────────
+    // ── users table + column migrations ───────────────────────────────────────
+    // `users` was historically created only by deploy/seed.sql (or auth flows),
+    // making this migrator crash app-wide on any database that was initialized
+    // without the seed (fresh volume, DB_NAME override, manual install). The
+    // migrator must be self-sufficient: own the table like every other one.
+    // Definition mirrors deploy/seed.sql; the accounts themselves still come
+    // from the seed or self-registration — no default credentials are created.
+    $pdo->exec("CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(255) NOT NULL UNIQUE,
+        password VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255) NULL,
+        role VARCHAR(20) NOT NULL DEFAULT 'viewer',
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        classification VARCHAR(50) NOT NULL DEFAULT 'individual',
+        contact VARCHAR(50) NULL,
+        lrn VARCHAR(12) NULL,
+        school_name VARCHAR(255) NULL,
+        grade_level VARCHAR(100) NULL,
+        institutional_id VARCHAR(50) NULL,
+        profile_image VARCHAR(500) NULL,
+        avatar_id VARCHAR(120) NULL,
+        profile_image_updated_at DATETIME NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     $uCols = [];
     foreach ($pdo->query('SHOW COLUMNS FROM users') as $r) $uCols[$r['Field']] = true;
     if (!isset($uCols['contact']))        { try { $pdo->exec('ALTER TABLE users ADD COLUMN contact VARCHAR(255) NULL AFTER full_name'); }                              catch (Throwable) {} }
@@ -564,6 +603,7 @@ function ensureLibrarySchema(PDO $pdo): void {
     if (!isset($uCols['is_active']))      { try { $pdo->exec('ALTER TABLE users ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1'); }                               catch (Throwable) {} }
     if (!isset($uCols['avatar_id']))                { try { $pdo->exec('ALTER TABLE users ADD COLUMN avatar_id VARCHAR(120) NULL'); }                          catch (Throwable) {} }
     if (!isset($uCols['profile_image_updated_at'])) { try { $pdo->exec('ALTER TABLE users ADD COLUMN profile_image_updated_at DATETIME NULL'); }               catch (Throwable) {} }
+    if (!isset($uCols['institutional_id']))         { try { $pdo->exec('ALTER TABLE users ADD COLUMN institutional_id VARCHAR(50) NULL'); }                    catch (Throwable) {} }
 
     // ── delivery_documents ─────────────────────────────────────────────────────
     $pdo->exec("CREATE TABLE IF NOT EXISTS delivery_documents (
@@ -586,6 +626,7 @@ function ensureLibrarySchema(PDO $pdo): void {
     if (!isset($dCols['po_number']))   { try { $pdo->exec('ALTER TABLE deliveries ADD COLUMN po_number VARCHAR(100) NULL AFTER status'); }                          catch (Throwable) {} }
     if (!isset($dCols['ref_number']))  { try { $pdo->exec('ALTER TABLE deliveries ADD COLUMN ref_number VARCHAR(100) NULL AFTER po_number'); }                      catch (Throwable) {} }
     if (!isset($dCols['received_by'])) { try { $pdo->exec('ALTER TABLE deliveries ADD COLUMN received_by VARCHAR(255) NULL AFTER ref_number'); }                   catch (Throwable) {} }
+    if (!isset($dCols['delivered_by'])) { try { $pdo->exec('ALTER TABLE deliveries ADD COLUMN delivered_by VARCHAR(255) NULL AFTER ref_number'); }                 catch (Throwable) {} }
 
     // ── import_logs ────────────────────────────────────────────────────────────
     $pdo->exec("CREATE TABLE IF NOT EXISTS import_logs (
@@ -813,8 +854,8 @@ function ensureLibrarySchema(PDO $pdo): void {
 
     // Mark schema version so subsequent requests skip this block
     try {
-        $pdo->exec("INSERT INTO library_settings (setting_key, setting_value) VALUES ('schema_version', '13')
-                    ON DUPLICATE KEY UPDATE setting_value = '13'");
+        $pdo->exec("INSERT INTO library_settings (setting_key, setting_value) VALUES ('schema_version', '16')
+                    ON DUPLICATE KEY UPDATE setting_value = '16'");
     } catch (Throwable) {}
 }
 
@@ -981,7 +1022,14 @@ function storeUploadedFile(int $documentId, string $uploadDir = LIBRARY_UPLOAD_D
 }
 
 
-function storeDeliveryDocument(int $deliveryId): void {
+/**
+ * Persist uploaded supporting documents (multipart files[] / file) against a
+ * delivery. $label classifies the batch (Delivery Receipt, Purchase Order, …) —
+ * stored per file so future intelligent processing (OCR / spreadsheet import)
+ * can target the right document type without a schema change.
+ * Returns the number of files stored.
+ */
+function storeDeliveryDocument(int $deliveryId, ?string $label = null): int {
     global $pdo;
 
     if (!is_dir(DELIVERY_UPLOAD_DIR)) mkdir(DELIVERY_UPLOAD_DIR, 0755, true);
@@ -994,20 +1042,24 @@ function storeDeliveryDocument(int $deliveryId): void {
             'error'    => [$_FILES['file']['error']],
         ];
     }
-    if (!$filesArr || empty($filesArr['name'][0])) return;
+    if (!$filesArr || empty($filesArr['name'][0])) return 0;
 
     $stmt = $pdo->prepare(
-        'INSERT INTO delivery_documents (delivery_id,file_path,file_name,file_size,file_type,uploaded_by,uploaded_at)
-         VALUES (?,?,?,?,?,?,NOW())'
+        'INSERT INTO delivery_documents (delivery_id,file_path,file_name,file_size,file_type,label,uploaded_by,uploaded_at)
+         VALUES (?,?,?,?,?,?,?,NOW())'
     );
 
+    $stored = 0;
     foreach ($filesArr['tmp_name'] as $i => $tmpName) {
         $errCode = $filesArr['error'][$i] ?? UPLOAD_ERR_NO_FILE;
+        if ($errCode === UPLOAD_ERR_INI_SIZE || $errCode === UPLOAD_ERR_FORM_SIZE) {
+            throw new RuntimeException('Uploaded file exceeds the allowed size limit (20 MB).');
+        }
         if ($errCode !== UPLOAD_ERR_OK) continue;
 
         $originalName = basename($filesArr['name'][$i]);
         if (!isAllowedUploadFile($tmpName, $originalName)) {
-            throw new RuntimeException("File type not allowed: {$originalName}.");
+            throw new RuntimeException("File type not allowed: {$originalName}. Supported: PDF, Excel, Word, Images, ZIP.");
         }
 
         $ext     = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
@@ -1021,10 +1073,13 @@ function storeDeliveryDocument(int $deliveryId): void {
                 $originalName,
                 filesize(DELIVERY_UPLOAD_DIR . $newName),
                 $ext,
+                $label !== null && $label !== '' ? $label : null,
                 currentUserId(),
             ]);
+            $stored++;
         }
     }
+    return $stored;
 }
 
 // When required by cron.php (CLI context), stop here — functions above are available
@@ -1032,7 +1087,18 @@ function storeDeliveryDocument(int $deliveryId): void {
 if (PHP_SAPI === 'cli') { return; }
 
 apiRequireLogin();
-ensureLibrarySchema($pdo);
+// Fault isolation: a failed migration step must degrade the affected feature
+// (whose handler reports and logs a real error) — never take down EVERY
+// endpoint. Without this, one throw here hits the global handler and the whole
+// app returns "An unexpected error occurred" until the DB is fixed by hand.
+// The failure is logged at ERROR level to storage/logs/ and the server log.
+try {
+    ensureLibrarySchema($pdo);
+} catch (Throwable $e) {
+    $msg = 'SCHEMA MIGRATION FAILED (serving request anyway): '
+         . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine();
+    if (function_exists('lms_log')) { lms_log('error', $msg); } else { error_log('[library_sys] ' . $msg); }
+}
 // Trash purge is a maintenance job that cron.php runs reliably; sampling it here keeps
 // the safety net without paying a cleanup query on every single request under load.
 if (random_int(1, 50) === 1) { purgeExpiredTrash($pdo); }
@@ -1127,12 +1193,14 @@ switch ($action) {
     case 'audit_logs_get':       handleAuditLogsGet(); break;
     case 'settings_get':         handleSettingsGet(); break;
     case 'settings_save':        handleSettingsSave(); break;
+    case 'email_test':           handleEmailTest(); break;
+    case 'book_detail':          handleBookDetail(); break;
+    case 'borrow_eligibility':   handleBorrowEligibility(); break;
     case 'borrowers_get':        handleBorrowersGet(); break;
     case 'borrower_profile':     handleBorrowerProfile(); break;
     case 'borrowers_update':     handleBorrowersUpdate(); break;
     case 'notifications_get':    handleNotificationsGet(); break;
     case 'notifications_mark_read': handleNotificationsMarkRead(); break;
-    case 'calculate_fine':       handleCalculateFine(); break;
     case 'category_stats':           handleCategoryStats(); break;
     // ── Settings Module ──────────────────────────────────────────────────────
     case 'users_list':               handleUsersList(); break;
@@ -1901,7 +1969,31 @@ function handleBooksDelete(): void {
     }
 
     try {
+        // Referential-integrity guard (this schema uses app-level integrity, no FKs):
+        // never hard-delete a title that is currently on loan or reserved — that would
+        // orphan the borrow record and lose track of a physical copy. Closed history
+        // (returned/cancelled) does not block deletion.
+        $onLoan = $pdo->prepare(
+            "SELECT COUNT(*) FROM book_borrow_items i
+             JOIN book_borrow_records r ON r.id = i.borrow_id
+             WHERE i.book_id = ? AND r.status IN ('borrowed','pending')"
+        );
+        $onLoan->execute([$id]);
+        if ((int) $onLoan->fetchColumn() > 0) {
+            sendError('This book has active borrow requests or is currently on loan. Process the returns first, then archive or delete it.');
+        }
+        try {
+            $resv = $pdo->prepare(
+                "SELECT COUNT(*) FROM book_reservations WHERE book_id = ? AND status IN ('pending','confirmed','ready')"
+            );
+            $resv->execute([$id]);
+            if ((int) $resv->fetchColumn() > 0) {
+                sendError('This book has active reservations. Cancel or fulfil them first, then delete it.');
+            }
+        } catch (Throwable) { /* reservations table may be absent on old schemas */ }
+
         $pdo->prepare('DELETE FROM books WHERE id = ?')->execute([$id]);
+        logAudit($pdo, 'book_deleted', 'books', 'book', $id, "Book #{$id} deleted");
         sendSuccess([], 'Book deleted successfully.');
     } catch (Throwable $e) {
         sendError('Failed to delete book: ' . dbgMsg($e), 500);
@@ -1911,6 +2003,7 @@ function handleBooksDelete(): void {
 
 function handleDeliveryGet(): void {
     global $pdo;
+    apiRequireStaff();   // deliveries (suppliers, PO/DR refs) are staff/admin only
     try {
         $stmt = $pdo->query(
             'SELECT d.*, u.full_name AS logged_by_name
@@ -1919,6 +2012,14 @@ function handleDeliveryGet(): void {
              ORDER BY d.delivery_date DESC, d.created_at DESC'
         );
         $deliveries = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Supporting-document counts in one grouped query (for the paperclip badge)
+        $docCounts = [];
+        try {
+            $docCounts = $pdo->query(
+                'SELECT delivery_id, COUNT(*) FROM delivery_documents GROUP BY delivery_id'
+            )->fetchAll(PDO::FETCH_KEY_PAIR);
+        } catch (Throwable) {}
 
         foreach ($deliveries as &$delivery) {
             $stmt2 = $pdo->prepare(
@@ -1929,6 +2030,7 @@ function handleDeliveryGet(): void {
             );
             $stmt2->execute([$delivery['id']]);
             $delivery['items'] = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+            $delivery['docs_count'] = (int) ($docCounts[$delivery['id']] ?? 0);
         }
         unset($delivery);
 
@@ -1945,7 +2047,14 @@ function handleDeliveryAdd(): void {
     $deliveryDate = cleanValue($_POST['delivery_date'] ?? '') ?: date('Y-m-d');
     $source       = cleanValue($_POST['source'] ?? '');
     $remarks      = cleanValue($_POST['remarks'] ?? '');
+    $status       = cleanValue($_POST['status'] ?? 'received');
+    $poNumber     = cleanValue($_POST['po_number'] ?? '');
+    $refNumber    = cleanValue($_POST['ref_number'] ?? '');
+    $deliveredBy  = cleanValue($_POST['delivered_by'] ?? '');
+    $receivedBy   = cleanValue($_POST['received_by'] ?? '');
+    $docLabel     = cleanValue($_POST['doc_label'] ?? '');
     $items        = $_POST['items'] ?? [];
+    if (!in_array($status, ['pending', 'received', 'approved', 'cancelled'], true)) $status = 'received';
 
     if ($source === '') {
         sendError('Delivery source is required.');
@@ -1958,10 +2067,11 @@ function handleDeliveryAdd(): void {
         $pdo->beginTransaction();
 
         $stmt = $pdo->prepare(
-            'INSERT INTO deliveries (delivery_date, source, remarks, logged_by)
-             VALUES (?, ?, ?, ?)'
+            'INSERT INTO deliveries (delivery_date, source, remarks, status, po_number, ref_number, delivered_by, received_by, logged_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$deliveryDate, $source, $remarks ?: null, currentUserId()]);
+        $stmt->execute([$deliveryDate, $source, $remarks ?: null, $status,
+            $poNumber ?: null, $refNumber ?: null, $deliveredBy ?: null, $receivedBy ?: null, currentUserId()]);
         $deliveryId = (int) $pdo->lastInsertId();
 
         $stmtItem = $pdo->prepare(
@@ -2001,7 +2111,24 @@ function handleDeliveryAdd(): void {
             "Delivery from {$source} recorded.", 'delivery-log', $deliveryId);
 
         $pdo->commit();
-        sendSuccess(['delivery_id' => $deliveryId], 'Delivery logged successfully.');
+
+        // Supporting documents uploaded with the same submission (multipart files[]).
+        // Stored AFTER the commit: a failed upload must never roll back the recorded
+        // delivery — the files can be re-attached from the details view instead.
+        $docWarning = '';
+        try {
+            $stored = storeDeliveryDocument($deliveryId, $docLabel ?: null);
+            if ($stored > 0) {
+                logAudit($pdo, 'delivery_doc_attached', 'delivery-log', 'delivery', $deliveryId,
+                    "{$stored} supporting document(s) uploaded with delivery");
+            }
+        } catch (Throwable $e) {
+            error_log('[library_sys] delivery doc upload failed: ' . $e->getMessage());
+            $docWarning = ' However, a supporting document could not be saved (' . $e->getMessage()
+                        . ') — you can attach it again from the delivery details.';
+        }
+
+        sendSuccess(['delivery_id' => $deliveryId], 'Delivery logged successfully.' . $docWarning);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         sendError('Failed to log delivery: ' . dbgMsg($e), 500);
@@ -2019,9 +2146,10 @@ function handleDeliveryUpdate(): void {
     $source     = cleanValue($_POST['source'] ?? '');
     $remarks    = cleanValue($_POST['remarks'] ?? '');
     $status     = cleanValue($_POST['status'] ?? 'received');
-    $poNumber   = cleanValue($_POST['po_number'] ?? '');
-    $refNumber  = cleanValue($_POST['ref_number'] ?? '');
-    $receivedBy = cleanValue($_POST['received_by'] ?? '');
+    $poNumber    = cleanValue($_POST['po_number'] ?? '');
+    $refNumber   = cleanValue($_POST['ref_number'] ?? '');
+    $deliveredBy = cleanValue($_POST['delivered_by'] ?? '');
+    $receivedBy  = cleanValue($_POST['received_by'] ?? '');
 
     if (!$id || $source === '') sendError('Delivery ID and source are required.');
 
@@ -2030,8 +2158,8 @@ function handleDeliveryUpdate(): void {
 
     try {
         $pdo->prepare(
-            'UPDATE deliveries SET delivery_date=?,source=?,remarks=?,status=?,po_number=?,ref_number=?,received_by=? WHERE id=?'
-        )->execute([$date, $source, $remarks ?: null, $status, $poNumber ?: null, $refNumber ?: null, $receivedBy ?: null, $id]);
+            'UPDATE deliveries SET delivery_date=?,source=?,remarks=?,status=?,po_number=?,ref_number=?,delivered_by=?,received_by=? WHERE id=?'
+        )->execute([$date, $source, $remarks ?: null, $status, $poNumber ?: null, $refNumber ?: null, $deliveredBy ?: null, $receivedBy ?: null, $id]);
         logAudit($pdo, 'delivery_updated', 'delivery-log', 'delivery', $id, "Source: {$source}, Status: {$status}");
         sendSuccess([], 'Delivery updated.');
     } catch (Throwable $e) {
@@ -2047,9 +2175,17 @@ function handleDeliveryDelete(): void {
     if (!$id) sendError('Delivery ID required.');
 
     try {
+        // Remove supporting documents (files on disk + rows) before the record
+        $docs = $pdo->prepare('SELECT file_path FROM delivery_documents WHERE delivery_id=?');
+        $docs->execute([$id]);
+        foreach ($docs->fetchAll(PDO::FETCH_COLUMN) as $path) {
+            $abs = __DIR__ . '/../' . $path;
+            if ($path && file_exists($abs)) @unlink($abs);
+        }
+        $pdo->prepare('DELETE FROM delivery_documents WHERE delivery_id=?')->execute([$id]);
         $pdo->prepare('DELETE FROM delivery_items WHERE delivery_id=?')->execute([$id]);
         $pdo->prepare('DELETE FROM deliveries WHERE id=?')->execute([$id]);
-        logAudit($pdo, 'delivery_deleted', 'delivery-log', 'delivery', $id, "Delivery #{$id} deleted");
+        logAudit($pdo, 'delivery_deleted', 'delivery-log', 'delivery', $id, "Delivery #{$id} deleted (items + documents)");
         sendSuccess([], 'Delivery deleted.');
     } catch (Throwable $e) {
         sendError('Failed to delete delivery: ' . dbgMsg($e), 500);
@@ -2065,14 +2201,11 @@ function handleDeliveryAttachDoc(): void {
     if (!$deliveryId) sendError('Delivery ID required.');
 
     try {
-        storeDeliveryDocument($deliveryId);
-        // Update label for last inserted doc
-        if ($label) {
-            $lastId = (int) $pdo->lastInsertId();
-            if ($lastId) $pdo->prepare('UPDATE delivery_documents SET label=? WHERE id=?')->execute([$label, $lastId]);
-        }
-        logAudit($pdo, 'delivery_doc_attached', 'delivery-log', 'delivery', $deliveryId, "Document attached");
-        sendSuccess([], 'Document attached.');
+        $stored = storeDeliveryDocument($deliveryId, $label ?: null);
+        if ($stored === 0) sendError('No file was received. Please choose a file and try again.');
+        logAudit($pdo, 'delivery_doc_attached', 'delivery-log', 'delivery', $deliveryId,
+            "{$stored} document(s) attached" . ($label ? " ({$label})" : ''));
+        sendSuccess(['stored' => $stored], $stored === 1 ? 'Document attached.' : "{$stored} documents attached.");
     } catch (Throwable $e) {
         sendError(dbgMsg($e), 400);
     }
@@ -2102,6 +2235,7 @@ function handleDeliveryDeleteDoc(): void {
 
 function handleDeliveryGetDocs(): void {
     global $pdo;
+    apiRequireStaff();   // document metadata is staff/admin only (files are also gated in file_serve)
 
     $deliveryId = (int) ($_GET['delivery_id'] ?? 0);
     if (!$deliveryId) sendError('Delivery ID required.');
@@ -2521,8 +2655,6 @@ function storeAnnouncementAttachments(PDO $pdo, int $announcementId): int {
     return $stored;
 }
 
-const ANNOUNCEMENT_CATEGORIES = ['general','urgent','event','academic','library','memorandum'];
-
 function handleAnnouncementsAdd(): void {
     global $pdo;
     apiRequireStaff();
@@ -2783,6 +2915,137 @@ function handleBookCategoryStats(): void {
     }
 }
 
+/**
+ * Full record for the Book Details view: every catalog field plus live
+ * circulation numbers. Read-only and available to every signed-in role.
+ */
+function handleBookDetail(): void {
+    global $pdo;
+    apiRequireLogin();
+
+    $id = (int) ($_GET['id'] ?? 0);
+    if ($id <= 0) sendError('Missing book id.');
+
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM books WHERE id = ? LIMIT 1');
+        $stmt->execute([$id]);
+        $book = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$book) sendError('Book not found.', 404);
+
+        $onLoan = $pdo->prepare(
+            "SELECT COALESCE(SUM(GREATEST(i.quantity - COALESCE(i.returned_quantity,0),0)),0)
+             FROM book_borrow_items i JOIN book_borrow_records r ON r.id = i.borrow_id
+             WHERE r.status = 'borrowed' AND i.book_id = ?"
+        );
+        $onLoan->execute([$id]);
+        $book['copies_on_loan'] = (int) $onLoan->fetchColumn();
+
+        $book['copies_reserved'] = 0;
+        try {
+            $res = $pdo->prepare(
+                "SELECT COALESCE(SUM(quantity),0) FROM book_reservations
+                 WHERE book_id = ? AND status IN ('pending','confirmed','ready')"
+            );
+            $res->execute([$id]);
+            $book['copies_reserved'] = (int) $res->fetchColumn();
+        } catch (Throwable) {}
+
+        $ovd = $pdo->prepare(
+            "SELECT COUNT(*) FROM book_borrow_items i JOIN book_borrow_records r ON r.id = i.borrow_id
+             WHERE i.book_id = ? AND r.status = 'borrowed' AND r.due_at IS NOT NULL AND r.due_at < NOW()"
+        );
+        $ovd->execute([$id]);
+        $book['has_overdue'] = ((int) $ovd->fetchColumn()) > 0;
+        $book['is_archived'] = (int) ($book['is_archived'] ?? 0) === 1;
+
+        // Does the current user already have this title out or requested?
+        $book['user_has_active'] = false;
+        try {
+            $bq = $pdo->prepare('SELECT id FROM library_borrowers WHERE user_id = ? LIMIT 1');
+            $bq->execute([currentUserId()]);
+            $borrowerId = (int) $bq->fetchColumn();
+            if ($borrowerId) {
+                $uq = $pdo->prepare(
+                    "SELECT COUNT(*) FROM book_borrow_items i JOIN book_borrow_records r ON r.id = i.borrow_id
+                     WHERE i.book_id = ? AND r.borrower_id = ? AND r.status IN ('pending','borrowed')"
+                );
+                $uq->execute([$id, $borrowerId]);
+                $book['user_has_active'] = ((int) $uq->fetchColumn()) > 0;
+            }
+        } catch (Throwable) {}
+
+        sendSuccess($book);
+    } catch (Throwable $e) {
+        sendError('Failed to load book details: ' . dbgMsg($e), 500);
+    }
+}
+
+/**
+ * Borrowing eligibility for the signed-in user: their classification's policy
+ * plus live counts of active loans and pending requests, so the Borrow Cart can
+ * show the remaining allowance and block invalid submissions BEFORE they reach
+ * the librarian's approval queue. (Server-side re-validation still happens at
+ * approval time — this endpoint is UX guidance, not the enforcement layer.)
+ */
+function handleBorrowEligibility(): void {
+    global $pdo;
+    apiRequireLogin();
+
+    try {
+        $userId = (int) currentUserId();
+        $cls    = 'individual';
+        try {
+            $cq = $pdo->prepare('SELECT classification FROM users WHERE id = ? LIMIT 1');
+            $cq->execute([$userId]);
+            $cls = (string) ($cq->fetchColumn() ?: 'individual');
+        } catch (Throwable) {}
+
+        $policy = null;
+        try {
+            $pq = $pdo->prepare('SELECT * FROM borrowing_policies WHERE classification = ? LIMIT 1');
+            $pq->execute([$cls]);
+            $policy = $pq->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Throwable) {}
+        if (!$policy) {
+            $policy = ['max_borrow_days' => 14, 'max_books_per_borrow' => 5];
+        }
+
+        $activeItems = 0; $pendingItems = 0; $overdueCount = 0;
+        $bq = $pdo->prepare('SELECT id FROM library_borrowers WHERE user_id = ? LIMIT 1');
+        $bq->execute([$userId]);
+        $borrowerId = (int) $bq->fetchColumn();
+        if ($borrowerId) {
+            $aq = $pdo->prepare(
+                "SELECT r.status, COALESCE(SUM(GREATEST(i.quantity - COALESCE(i.returned_quantity,0),0)),0) AS qty,
+                        COALESCE(SUM(r.status = 'borrowed' AND r.due_at IS NOT NULL AND r.due_at < NOW()),0) AS ovd
+                 FROM book_borrow_records r JOIN book_borrow_items i ON i.borrow_id = r.id
+                 WHERE r.borrower_id = ? AND r.status IN ('pending','borrowed')
+                 GROUP BY r.status"
+            );
+            $aq->execute([$borrowerId]);
+            foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                if ($row['status'] === 'borrowed') { $activeItems = (int) $row['qty']; $overdueCount = (int) $row['ovd']; }
+                else                               { $pendingItems = (int) $row['qty']; }
+            }
+        }
+
+        $maxBooks  = max(1, (int) ($policy['max_books_per_borrow'] ?? 5));
+        $remaining = max(0, $maxBooks - $activeItems - $pendingItems);
+
+        sendSuccess([
+            'classification'   => $cls,
+            'max_books'        => $maxBooks,
+            'max_borrow_days'  => (int) ($policy['max_borrow_days'] ?? 14),
+            'active_items'     => $activeItems,
+            'pending_items'    => $pendingItems,
+            'has_overdue'      => $overdueCount > 0,
+            'remaining'        => $remaining,
+        ]);
+    } catch (Throwable $e) {
+        sendError('Failed to load borrowing eligibility: ' . dbgMsg($e), 500);
+    }
+}
+
 function handleBookBorrowRequestsGet(): void {
     global $pdo;
 
@@ -2827,7 +3090,7 @@ function handleBookBorrowRequestsGet(): void {
     $sql =
         "SELECT r.id, r.status, r.borrow_type, r.time_allowed_minutes,
                 r.requested_at, r.borrowed_at, r.due_at, r.returned_at,
-                r.return_notes, r.fine_amount, r.reservation_id,
+                r.return_notes, r.reservation_id,
                 r.requested_start, r.requested_due,
                 b.name AS borrower_name, b.contact AS borrower_contact,
                 u.full_name AS requested_by_name, u2.full_name AS reviewed_by_name
@@ -3107,9 +3370,7 @@ function handleBookBorrowReturn(): void {
 
     $borrowId = (int) ($_POST['id'] ?? 0);
     $returnNotes = cleanValue($_POST['return_notes'] ?? '');
-    $fineAmount = isset($_POST['fine_amount']) && is_numeric($_POST['fine_amount']) ? (float) $_POST['fine_amount'] : null;
     $items = $_POST['items'] ?? [];
-    $autoFineOverride = ($_POST['auto_fine'] ?? '') === '1';
 
     if (!$borrowId) {
         sendError('Missing borrow id.');
@@ -3194,37 +3455,20 @@ function handleBookBorrowReturn(): void {
         }
 
         if ($allReturned) {
-            // Auto-calculate fine if not supplied and auto_fine_enabled
-            if ($fineAmount === null || $autoFineOverride) {
-                $autoFineOn = ($pdo->query(
-                    "SELECT setting_value FROM library_settings WHERE setting_key = 'auto_fine_enabled'"
-                )->fetchColumn() === '1');
-                if ($autoFineOn) {
-                    $rate = (float)($pdo->query(
-                        "SELECT setting_value FROM library_settings WHERE setting_key = 'fine_per_day'"
-                    )->fetchColumn() ?: 5);
-                    $rFetch = $pdo->prepare("SELECT due_at FROM book_borrow_records WHERE id = ? LIMIT 1");
-                    $rFetch->execute([$borrowId]);
-                    $dueAt = $rFetch->fetchColumn();
-                    if ($dueAt) {
-                        // Same rule as handleCalculateFine — delegated to the unit-tested core.
-                        $fineAmount = \Lib\Fines::calculate($dueAt, new DateTime(), $rate)['fine_amount'];
-                    }
-                }
-            }
-
+            // Fines were retired per client decision (v1.1) — returns simply
+            // close the record. The fine_amount column is retained for the
+            // historical values already stored on old records.
             $stmt = $pdo->prepare(
                 "UPDATE book_borrow_records
                  SET status = 'returned',
                      returned_at = NOW(),
                      returned_by = ?,
-                     return_notes = ?,
-                     fine_amount = ?
+                     return_notes = ?
                  WHERE id = ?"
             );
-            $stmt->execute([currentUserId(), $returnNotes ?: null, $fineAmount, $borrowId]);
+            $stmt->execute([currentUserId(), $returnNotes ?: null, $borrowId]);
             logAudit($pdo, 'book_returned', 'borrowing', 'borrow_record', $borrowId,
-                "Fine: PHP " . number_format((float)($fineAmount ?? 0), 2));
+                'All items returned.');
         }
         // Returned copies free up capacity — mark linked reservation completed,
         // then offer freed capacity to the waiting list (FIFO)
@@ -4893,11 +5137,13 @@ function handleSettingsSave(): void {
     }
 
     $allowed = [
-        'fine_per_day', 'max_borrow_days', 'max_books_per_borrow',
+        'max_borrow_days', 'max_books_per_borrow',
         'library_name', 'library_address', 'library_contact',
         'sms_enabled', 'sms_api_key', 'sms_sender_name',
         'sms_overdue_message', 'sms_borrow_message',
-        'auto_fine_enabled', 'reservation_expiry_days',
+        'smtp_host', 'smtp_port', 'smtp_secure', 'smtp_user', 'smtp_pass',
+        'smtp_from_email', 'smtp_from_name',
+        'reservation_expiry_days',
         'notify_borrow', 'notify_overdue',
     ];
 
@@ -4919,6 +5165,43 @@ function handleSettingsSave(): void {
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         sendError('Failed to save settings: ' . dbgMsg($e), 500);
+    }
+}
+
+/**
+ * Admin-only SMTP verification: sends a real test email using the active
+ * configuration (env vars override library_settings) so the librarian can
+ * confirm Gmail delivery end-to-end before users hit the registration flow.
+ */
+function handleEmailTest(): void {
+    global $pdo;
+    apiRequireAdmin();
+
+    $to = trim($_POST['email'] ?? '');
+    if (!filter_var($to, FILTER_VALIDATE_EMAIL)) {
+        sendError('Please enter a valid email address to send the test to.');
+    }
+
+    $mailer = \Lib\Mailer::fromConfig($pdo);
+    if (!$mailer->isConfigured()) {
+        sendError('SMTP is not configured yet. Fill in the host, username, and app password first (or set the SMTP_* environment variables), then save.');
+    }
+
+    try {
+        $mailer->send(
+            $to, '',
+            'SMTP test — SDO Quirino Library',
+            '<div style="font-family:Arial,sans-serif;font-size:14px;color:#111827;">'
+            . '<p><strong>Success!</strong> Your library system can send email.</p>'
+            . '<p style="color:#6b7280;font-size:12px;">Sent ' . date('F j, Y g:i A') . ' from the Settings page.</p></div>',
+            "Success! Your library system can send email.\nSent " . date('F j, Y g:i A') . ' from the Settings page.'
+        );
+        logAudit($pdo, 'email_test', 'settings', null, null, "Sent SMTP test email to {$to}");
+        sendSuccess([], "Test email sent to {$to}. Check the inbox (and spam folder).");
+    } catch (Throwable $e) {
+        error_log('[library_sys] SMTP test failed: ' . $e->getMessage());
+        // The admin configuring SMTP needs the real reason (auth vs connect vs TLS).
+        sendError('Test failed: ' . $e->getMessage(), 500);
     }
 }
 
@@ -4962,8 +5245,7 @@ function handleBorrowersGet(): void {
                     b.classification, b.email, b.address, b.created_at, b.updated_at,
                     COUNT(DISTINCT r.id) AS total_borrows,
                     SUM(CASE WHEN r.status = 'borrowed' THEN 1 ELSE 0 END) AS active_borrows,
-                    SUM(CASE WHEN r.status = 'borrowed' AND r.due_at IS NOT NULL AND r.due_at < NOW() THEN 1 ELSE 0 END) AS overdue_count,
-                    COALESCE(SUM(r.fine_amount), 0) AS total_fines
+                    SUM(CASE WHEN r.status = 'borrowed' AND r.due_at IS NOT NULL AND r.due_at < NOW() THEN 1 ELSE 0 END) AS overdue_count
              FROM library_borrowers b
              LEFT JOIN book_borrow_records r ON r.borrower_id = b.id
              {$where}
@@ -4995,7 +5277,7 @@ function handleBorrowerProfile(): void {
 
     $hist = $pdo->prepare(
         "SELECT r.id, r.status, r.requested_at, r.borrowed_at, r.due_at, r.returned_at,
-                r.fine_amount, r.borrow_type,
+                r.borrow_type,
                 GROUP_CONCAT(bk.title SEPARATOR ', ') AS books_list,
                 SUM(i.quantity) AS total_qty
          FROM book_borrow_records r
@@ -5074,43 +5356,6 @@ function handleNotificationsMarkRead(): void {
         $pdo->exec("UPDATE admin_notifications SET is_read = 1 WHERE is_read = 0");
     }
     sendSuccess([], 'Notifications marked as read.');
-}
-
-// ═══════════════════════════════════════════════════════════════
-// FINE CALCULATOR
-// ═══════════════════════════════════════════════════════════════
-
-function handleCalculateFine(): void {
-    global $pdo;
-    apiRequireLogin();
-
-    $borrowId = (int)($_GET['id'] ?? 0);
-    if (!$borrowId) sendError('Borrow ID required.');
-
-    $rate = (float)($pdo->query(
-        "SELECT setting_value FROM library_settings WHERE setting_key = 'fine_per_day'"
-    )->fetchColumn() ?: 5);
-
-    $stmt = $pdo->prepare("SELECT status, due_at FROM book_borrow_records WHERE id = ? LIMIT 1");
-    $stmt->execute([$borrowId]);
-    $record = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$record) sendError('Record not found.', 404);
-
-    $fine = 0.0;
-    $overdueDays = 0;
-    if ($record['status'] === 'borrowed') {
-        $calc = \Lib\Fines::calculate($record['due_at'] ?? null, new DateTime(), $rate);
-        $overdueDays = $calc['overdue_days'];
-        $fine = $calc['fine_amount'];
-    }
-
-    sendSuccess([
-        'fine_amount'  => round($fine, 2),
-        'overdue_days' => $overdueDays,
-        'rate_per_day' => $rate,
-        'due_at'       => $record['due_at'],
-        'status'       => $record['status'],
-    ]);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -5341,16 +5586,16 @@ function handlePoliciesSave(): void {
     if (!is_array($policies)) sendError('Invalid payload.');
     $allowed = ['child','teen','individual','deped','school','professional','private_institution'];
     try {
+        // fine_per_day / grace_period_days are no longer managed here — the fine
+        // system was retired (v1.1). The columns remain in the table untouched.
         $stmt = $pdo->prepare(
             "INSERT INTO borrowing_policies
-                (classification,max_borrow_days,max_books_per_borrow,fine_per_day,reservation_expiry_days,grace_period_days)
-             VALUES (?,?,?,?,?,?)
+                (classification,max_borrow_days,max_books_per_borrow,reservation_expiry_days)
+             VALUES (?,?,?,?)
              ON DUPLICATE KEY UPDATE
                 max_borrow_days=VALUES(max_borrow_days),
                 max_books_per_borrow=VALUES(max_books_per_borrow),
-                fine_per_day=VALUES(fine_per_day),
-                reservation_expiry_days=VALUES(reservation_expiry_days),
-                grace_period_days=VALUES(grace_period_days)"
+                reservation_expiry_days=VALUES(reservation_expiry_days)"
         );
         foreach ($policies as $cls => $vals) {
             if (!in_array($cls, $allowed, true)) continue;
@@ -5358,9 +5603,7 @@ function handlePoliciesSave(): void {
                 $cls,
                 max(0, (int)   ($vals['max_borrow_days']        ?? 14)),
                 max(1, (int)   ($vals['max_books_per_borrow']   ?? 5)),
-                max(0, (float) ($vals['fine_per_day']           ?? 5)),
                 max(1, (int)   ($vals['reservation_expiry_days']?? 3)),
-                max(0, (int)   ($vals['grace_period_days']      ?? 0)),
             ]);
         }
         logAudit($pdo, 'save_policies', 'settings', null, null, 'Admin updated borrowing policies.');
@@ -5420,14 +5663,14 @@ function handleDbExportCsv(): void {
                 $rows    = $pdo->query(
                     "SELECT bbr.id, lb.name AS borrower,
                             GROUP_CONCAT(b.title ORDER BY b.title SEPARATOR '; ') AS books,
-                            bbr.status, bbr.borrowed_at, bbr.due_at, bbr.returned_at, bbr.fine_amount
+                            bbr.status, bbr.borrowed_at, bbr.due_at, bbr.returned_at
                      FROM book_borrow_records bbr
                      LEFT JOIN library_borrowers lb ON lb.id = bbr.borrower_id
                      LEFT JOIN book_borrow_items bbi ON bbi.borrow_id = bbr.id
                      LEFT JOIN books b ON b.id = bbi.book_id
                      GROUP BY bbr.id ORDER BY bbr.id"
                 )->fetchAll(PDO::FETCH_ASSOC);
-                $headers = ['ID','Borrower','Books','Status','Borrowed','Due','Returned','Fine (PHP)'];
+                $headers = ['ID','Borrower','Books','Status','Borrowed','Due','Returned'];
                 break;
             default:
                 sendError('Invalid type.'); return;
@@ -5811,7 +6054,7 @@ function handleUserActivityGet(): void {
     try {
         $stmt = $pdo->prepare(
             "SELECT bbr.id, bbr.status, bbr.borrowed_at, bbr.requested_at, bbr.due_at,
-                    bbr.returned_at, bbr.fine_amount,
+                    bbr.returned_at,
                     GROUP_CONCAT(b.title ORDER BY b.title SEPARATOR ', ') AS book_titles
              FROM book_borrow_records bbr
              LEFT JOIN book_borrow_items bbi ON bbi.borrow_id = bbr.id

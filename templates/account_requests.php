@@ -4,19 +4,40 @@
 <div class="card">
     <div class="card-body p-0">
         <?php
-        $stmt = $pdo->query("SELECT id, username, full_name, role, created_at FROM users WHERE status = 'pending' ORDER BY created_at ASC");
+        $stmt = $pdo->query("SELECT id, username, full_name, role, classification, institutional_id, created_at
+                             FROM users WHERE status = 'pending' ORDER BY created_at ASC");
         $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        // The ID label mirrors the registration form so the approver knows what to verify
+        $idLabels = [
+            'school' => 'DepEd School ID', 'child' => 'Student ID', 'teen' => 'Student ID',
+            'individual' => 'Employee ID', 'professional' => 'Employee ID',
+            'private_institution' => 'Institutional ID',
+        ];
+        $clsLabels = [
+            'child' => 'Child', 'teen' => 'Teen', 'individual' => 'Adult',
+            'school' => 'School', 'professional' => 'Professional',
+            'private_institution' => 'Private Org', 'deped' => 'DepEd',
+        ];
         ?>
         <div class="table-responsive">
             <table class="table table-hover mb-0">
-                <thead><tr><th>Full Name</th><th>Username</th><th>Requested Role</th><th>Date Requested</th><th>Action</th></tr></thead>
+                <thead><tr><th>Full Name</th><th>Username</th><th>Account Type</th><th>Institutional ID</th><th>Requested Role</th><th>Date Requested</th><th>Action</th></tr></thead>
                 <tbody>
                 <?php if (!$requests): ?>
-                    <tr><td colspan="5" class="text-center text-muted py-4">No pending account requests.</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4">No pending account requests.</td></tr>
                 <?php else: foreach ($requests as $req): ?>
                     <tr>
                         <td><?= htmlspecialchars($req['full_name']) ?></td>
                         <td><?= htmlspecialchars($req['username']) ?></td>
+                        <td><span class="badge bg-info"><?= htmlspecialchars($clsLabels[$req['classification'] ?? ''] ?? ucfirst((string)($req['classification'] ?? '—'))) ?></span></td>
+                        <td>
+                            <?php if (!empty($req['institutional_id'])): ?>
+                                <div style="font-weight:700;font-family:monospace;font-size:.88rem;"><?= htmlspecialchars($req['institutional_id']) ?></div>
+                                <div class="text-muted" style="font-size:.68rem;"><?= htmlspecialchars($idLabels[$req['classification'] ?? ''] ?? 'Institutional ID') ?> — verify before approving</div>
+                            <?php else: ?>
+                                <span class="text-muted">—</span>
+                            <?php endif; ?>
+                        </td>
                         <td><span class="badge bg-secondary"><?= htmlspecialchars(ucfirst($req['role'])) ?></span></td>
                         <td><?= htmlspecialchars($req['created_at']) ?></td>
                         <td>

@@ -40,6 +40,9 @@ login_debug.php
 reset_admin.php
 _locdbg.php
 
+# Archived legacy code (kept in git for recovery, never shipped in the image)
+legacy
+
 # Dev binaries, tunnels, logs, backups, local compose override
 cloudflared.exe
 *.exe

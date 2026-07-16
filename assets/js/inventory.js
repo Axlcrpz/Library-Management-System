@@ -245,17 +245,29 @@
                 (b.quantity_damaged > 0) ? chip(b.quantity_damaged, 'damaged', '#a32d2d') : ''].filter(Boolean).join(' ');
     }
 
+    // Details affordance shared by all three views. Borrowing intentionally has
+    // ONE entry point — the Add to Borrow Cart button inside Book Details — so
+    // users always see availability and their borrowing rules before committing.
+    function detailBtn(b) {
+        return `<button class="btn btn-sm btn-outline-primary" style="font-size:.7rem;padding:2px 9px;"
+                        onclick="event.stopPropagation();openBookDetails(${b.id})">
+                    <i class="fas fa-circle-info me-1"></i>View details</button>`;
+    }
+
     function gridHtml(items) {
         return '<div class="row g-2">' + items.map(b => {
             const s = statusOf(b);
             const availColor = b.quantity_available === 0 ? '#e24b4a' : (b.quantity_available <= LOW ? '#eab308' : '#3b6d11');
             return `<div class="col-12 col-md-6 col-xl-4">
-                <div style="border:1px solid var(--border);border-left:4px solid ${s.color};border-radius:12px;background:var(--surface);padding:12px;height:100%;display:flex;gap:12px;">
+                <div role="button" tabindex="0" onclick="openBookDetails(${b.id})"
+                     onkeydown="if(event.key==='Enter')openBookDetails(${b.id})"
+                     style="border:1px solid var(--border);border-left:4px solid ${s.color};border-radius:12px;background:var(--surface);padding:12px;height:100%;display:flex;gap:12px;cursor:pointer;transition:box-shadow .15s,border-color .15s;"
+                     onmouseover="this.style.boxShadow='0 4px 14px rgba(0,0,0,.08)'" onmouseout="this.style.boxShadow='none'">
                     ${coverHtml(b, 56, 82)}
                     <div style="flex:1;min-width:0;">
                         <div style="display:flex;justify-content:space-between;gap:6px;align-items:flex-start;">
                             <div style="font-weight:600;font-size:.86rem;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;" title="${esc(b.title)}">${esc(b.title)}</div>
-                            ${actionsMenu(b)}
+                            <span onclick="event.stopPropagation()">${actionsMenu(b)}</span>
                         </div>
                         <div class="text-muted" style="font-size:.74rem;margin-bottom:2px;">${esc(b.author || '—')}</div>
                         <div class="text-muted" style="font-size:.68rem;font-family:monospace;margin-bottom:6px;">${isbnOf(b) ? 'ISBN ' + esc(isbnOf(b)) : 'No ISBN'}</div>
@@ -264,6 +276,7 @@
                             <span class="badge bg-${s.cls}" style="font-size:.62rem;">${esc(s.label)}</span>
                         </div>
                         <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;">${circChips(b)}</div>
+                        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${detailBtn(b)}</div>
                     </div>
                 </div>
             </div>`;
@@ -273,7 +286,10 @@
     function compactHtml(items) {
         return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">' + items.map(b => {
             const s = statusOf(b);
-            return `<div style="display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--border);border-left:3px solid ${s.color};">
+            return `<div role="button" tabindex="0" onclick="openBookDetails(${b.id})"
+                 onkeydown="if(event.key==='Enter')openBookDetails(${b.id})"
+                 style="display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid var(--border);border-left:3px solid ${s.color};cursor:pointer;"
+                 onmouseover="this.style.background='var(--bg,#f8fafc)'" onmouseout="this.style.background='transparent'">
                 <div style="flex:1;min-width:0;">
                     <span style="font-weight:600;font-size:.82rem;">${esc(b.title)}</span>
                     <span class="text-muted" style="font-size:.74rem;"> · ${esc(b.author || '—')}</span>
@@ -281,7 +297,7 @@
                 <span class="text-muted" style="font-size:.7rem;font-family:monospace;">${esc(isbnOf(b) || '—')}</span>
                 <span style="font-size:.8rem;white-space:nowrap;"><strong>${b.quantity_available}</strong><span class="text-muted">/${b.quantity_total}</span></span>
                 <span class="badge bg-${s.cls}" style="font-size:.6rem;">${esc(s.label)}</span>
-                ${actionsMenu(b)}
+                <span onclick="event.stopPropagation()" style="display:flex;gap:6px;align-items:center;">${detailBtn(b)}${actionsMenu(b)}</span>
             </div>`;
         }).join('') + '</div>';
     }
@@ -289,7 +305,7 @@
     function tableHtml(items) {
         const rows = items.map(b => {
             const s = statusOf(b);
-            return `<tr>
+            return `<tr role="button" onclick="openBookDetails(${b.id})" style="cursor:pointer;">
                 <td><div style="font-weight:600;font-size:.8rem;">${esc(b.title)}</div></td>
                 <td style="font-size:.78rem;">${esc(b.author || '—')}</td>
                 <td style="font-size:.72rem;font-family:monospace;">${esc(isbnOf(b) || '—')}</td>
@@ -297,7 +313,7 @@
                 <td style="font-size:.78rem;">${esc(b.location_label || '—')}</td>
                 <td><strong>${b.quantity_available}</strong> <span class="text-muted">/ ${b.quantity_total}</span></td>
                 <td><span class="badge bg-${s.cls}" style="font-size:.62rem;">${esc(s.label)}</span></td>
-                <td class="text-end">${actionsMenu(b)}</td>
+                <td class="text-end" onclick="event.stopPropagation()"><span style="display:inline-flex;gap:6px;align-items:center;">${detailBtn(b)}${actionsMenu(b)}</span></td>
             </tr>`;
         }).join('');
         const th = (key, label) => key

@@ -5,7 +5,7 @@
             <?php if (!empty($isStaff)): ?>
             Manage book borrow requests and returns
             <?php else: ?>
-            Request to check out a book now. Need it for future dates?
+            Track your borrow requests here. Need it for future dates?
             <a href="#" onclick="switchTabById('reservations');return false;">Reserve it instead</a>.
             <?php endif; ?>
         </p>
@@ -27,9 +27,18 @@
             <i class="fas fa-rotate-right me-1"></i> Refresh
         </button>
 
+        <?php if (!empty($isStaff)): ?>
         <button class="btn btn-primary btn-sm" onclick="openBorrowRequestModal()">
             <i class="fas fa-plus me-1"></i> New Borrow Request
         </button>
+        <?php else: ?>
+        <button class="btn btn-outline-primary btn-sm" onclick="switchTabById('books')">
+            <i class="fas fa-magnifying-glass me-1"></i> Browse Catalog
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="openBorrowCart()">
+            <i class="fas fa-basket-shopping me-1"></i> My Borrow Cart
+        </button>
+        <?php endif; ?>
     </div>
 </div>
 <?php if (!empty($isStaff)): ?>
@@ -119,154 +128,16 @@
         </div>
     </div>
 </div>
-<script>
-let borrowModalInstance = null;
 
-/**
- * OPEN BORROW MODAL (FIXED)
- */
-window.openBorrowRequestModal = function () {
-    const modalEl = document.getElementById('borrowRequestModal');
-
-    if (!modalEl) {
-        console.error("Borrow modal not found (#borrowRequestModal)");
-        return;
-    }
-
-    borrowModalInstance = new bootstrap.Modal(modalEl);
-    borrowModalInstance.show();
-};
-
-/**
- * LOAD BORROW REQUESTS
- */
-window.loadBookBorrowRequests = async function () {
-    const status = document.getElementById('book-borrow-status-filter')?.value || 'active';
-
-    try {
-        const res = await fetch(`api/library_handler.php?action=borrow_list&status=${status}`, {
-            credentials: 'same-origin'
-        });
-
-        const data = await res.json();
-
-        if (!data.success) {
-            console.error(data);
-            return;
-        }
-
-        renderBorrowTables(data.data);
-
-    } catch (err) {
-        console.error("Failed to load borrow requests:", err);
-    }
-};
-
-/**
- * RENDER TABLES
- */
-function renderBorrowTables(data) {
-    const recordsBody = document.getElementById('book-borrow-records-body');
-    const pendingBody = document.getElementById('book-borrow-pending-body');
-
-    if (recordsBody) {
-        recordsBody.innerHTML = data.records?.length
-            ? data.records.map(renderRow).join('')
-            : `<tr><td colspan="8" class="text-center text-muted py-3">No records found</td></tr>`;
-    }
-
-    if (pendingBody) {
-        pendingBody.innerHTML = data.pending?.length
-            ? data.pending.map(renderPendingRow).join('')
-            : `<tr><td colspan="6" class="text-center text-muted py-3">No pending requests</td></tr>`;
-    }
-
-    const badge = document.getElementById('pending-count-badge');
-    if (badge) {
-        const count = data.pending?.length || 0;
-        badge.textContent = count;
-        badge.style.display = count ? 'inline-block' : 'none';
-    }
-}
-
-/**
- * ROW (MAIN TABLE)
- */
-function renderRow(b) {
-    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const staffCell = window.isStaff ? `<td>${esc(b.requested_by_name || '-')}</td>` : '';
-    return `
-        <tr>
-            <td><span class="badge bg-secondary">${esc(b.status)}</span></td>
-            <td>${esc(b.borrower_name)}</td>
-            ${staffCell}
-            <td>${esc(b.books || (b.items?.map(i=>i.title).join(', ')) || '-')}</td>
-            <td>${esc(b.borrowed_at || '-')}</td>
-            <td>${esc(b.due_at || '-')}</td>
-            <td>${esc(b.returned_at || '-')}</td>
-            <td>
-                <button class="btn btn-sm btn-outline-primary"
-                        onclick="viewBorrowRecord(${b.id})">
-                    View
-                </button>
-            </td>
-        </tr>
-    `;
-}
-
-/**
- * PENDING ROW
- */
-function renderPendingRow(b) {
-    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    return `
-        <tr>
-            <td>${esc(b.borrower_name)}</td>
-            <td>${esc(b.borrow_type || '-')}</td>
-            <td>${b.time_allowed_minutes ? b.time_allowed_minutes + ' min' : '-'}</td>
-            <td>${(b.items||[]).map(i=>esc(i.title)).join(', ') || '-'}</td>
-            <td>${esc(b.requested_at || '-')}</td>
-            <td>
-                <button class="btn btn-success btn-sm" onclick="approveBorrowRequest(${b.id})">Approve</button>
-                <button class="btn btn-danger btn-sm ms-1" onclick="rejectBorrowRequest(${b.id})">Reject</button>
-            </td>
-        </tr>
-    `;
-}
-
-async function approveBorrowRequest(id) {
-    if (!confirm('Approve this borrow request?')) return;
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
-    const params = new URLSearchParams({ action: 'book_borrow_approve', id });
-    const res = await fetch('api/library_handler.php', {
-        method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrfToken },
-        body: params
-    }).then(r => r.json()).catch(() => ({ success: false }));
-    if (res.success) { await loadBookBorrowRequests(); }
-    else { alert(res.message || 'Failed to approve.'); }
-}
-
-async function rejectBorrowRequest(id) {
-    if (!confirm('Reject this borrow request?')) return;
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
-    const params = new URLSearchParams({ action: 'book_borrow_reject', id });
-    const res = await fetch('api/library_handler.php', {
-        method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrfToken },
-        body: params
-    }).then(r => r.json()).catch(() => ({ success: false }));
-    if (res.success) { await loadBookBorrowRequests(); }
-    else { alert(res.message || 'Failed to reject.'); }
-}
-
-function viewBorrowRecord(id) {
-    // Placeholder: open modal or navigate to borrow detail
-    alert('Borrow record #' + id + ' — detailed view coming soon.');
-}
-
-
-document.addEventListener('DOMContentLoaded', () => {
-    loadBookBorrowRequests();
-});
-</script>
+<!-- Borrow record detail (rendered by viewBorrowRecord in app.js) -->
+<div class="modal fade" id="borrowRecordModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header" style="padding:12px 20px;">
+                <span style="font-weight:700;font-size:.9rem;"><i class="fas fa-receipt me-2" style="color:var(--primary);"></i>Borrow Request</span>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="borrowRecordBody"></div>
+        </div>
+    </div>
+</div>

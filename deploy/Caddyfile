@@ -1,0 +1,14 @@
+# Public HTTPS for the LMS staging stack.
+#
+# Caddy automatically obtains and renews a Let's Encrypt certificate for
+# SITE_ADDRESS (set in .env). Use a real domain, or — if you don't have one —
+# "<your-vps-public-ip>.sslip.io" (sslip.io resolves the embedded IP), which
+# lets Caddy issue a trusted cert with no DNS setup.
+#
+# reverse_proxy forwards X-Forwarded-Proto=https automatically, so the app emits
+# HSTS and marks session cookies Secure (see auth.php / config/security_headers.php).
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	reverse_proxy web:80
+}

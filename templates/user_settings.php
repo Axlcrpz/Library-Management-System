@@ -62,7 +62,7 @@
                         <button class="btn btn-outline-danger btn-sm" id="avatarRemoveBtn" style="display:none;" onclick="removeAvatarPhoto()">
                             <i class="fas fa-trash me-1"></i>Remove
                         </button>
-                        <input type="file" id="avatarFileInput" accept="image/jpeg,image/png,image/webp" style="display:none;" onchange="onAvatarFileChosen(event)">
+                        <input type="file" id="avatarFileInput" accept="image/jpeg,image/png,image/webp,image/gif" style="display:none;" onchange="onAvatarFileChosen(event)">
                     </div>
                     <div id="avatarHint" class="text-muted" style="font-size:.74rem;">
                          Photo changes are limited to once every 30 days.
@@ -174,11 +174,10 @@
                             <th>Borrowed</th>
                             <th>Due</th>
                             <th>Returned</th>
-                            <th>Fine</th>
                         </tr>
                     </thead>
                     <tbody id="my-activity-tbody">
-                        <tr><td colspan="6" class="text-center text-muted py-3">
+                        <tr><td colspan="5" class="text-center text-muted py-3">
                             <i class="fas fa-spinner fa-spin me-2"></i>Loading…
                         </td></tr>
                     </tbody>
@@ -298,7 +297,7 @@ function onAvatarFileChosen(e) {
     const file = e.target.files && e.target.files[0];
     e.target.value = ''; // allow re-picking the same file
     if (!file) return;
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) { acctToast({ success: false, message: 'Please choose a JPG, PNG, or WebP image.' }); return; }
+    if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) { acctToast({ success: false, message: 'Please choose a JPG, PNG, WebP, or GIF image.' }); return; }
     if (file.size > 10 * 1024 * 1024) { acctToast({ success: false, message: 'That image is too large (max 10 MB).' }); return; }
 
     const img = new Image();
@@ -469,15 +468,13 @@ async function loadMyActivity() {
     if (!tbody) return;
     const rows = res.success ? (res.data || []) : [];
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No borrow history found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No borrow history found.</td></tr>';
         return;
     }
     const sc = { pending:'warning', approved:'success', active:'success', returned:'secondary', rejected:'danger', cancelled:'secondary' };
     tbody.innerHTML = rows.map(r => {
         const st    = (r.status || 'pending').toLowerCase();
         const badge = `<span class="badge bg-${sc[st]||'secondary'}" style="font-size:.7rem;">${st}</span>`;
-        const fine  = parseFloat(r.fine_amount || 0) > 0
-            ? `<span class="text-danger fw-semibold">₱${parseFloat(r.fine_amount).toFixed(2)}</span>` : '—';
         return `<tr>
             <td class="fw-semibold" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${uaEsc(r.book_titles)}">
                 ${uaEsc(r.book_titles || '—')}
@@ -486,7 +483,6 @@ async function loadMyActivity() {
             <td>${uaFmtDate(r.borrowed_at || r.requested_at)}</td>
             <td>${uaFmtDate(r.due_at)}</td>
             <td>${uaFmtDate(r.returned_at)}</td>
-            <td>${fine}</td>
         </tr>`;
     }).join('');
 }

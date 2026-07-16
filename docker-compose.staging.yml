@@ -1,36 +1,48 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# PRODUCTION stack — hardened. Bring up with:
-#     docker compose -f docker-compose.prod.yml up -d --build
+#  STAGING — public HTTPS in one command, for stress testing before production.
 #
-# Differences vs the dev docker-compose.yml:
-#   • NO phpMyAdmin (admin the DB over an SSH tunnel instead)
-#   • DB port is NOT published to the host (reachable only on the compose network)
-#   • Web is bound to 127.0.0.1 only — a reverse proxy / Cloudflare Tunnel
-#     terminates TLS in front; the app is never exposed directly on 0.0.0.0
-#   • NO source bind-mount — the immutable built image is what runs
-#   • Secrets are REQUIRED (no weak defaults): an unset value fails the command
-#   • Healthchecks gate startup ordering and enable auto-restart on failure
+#  Caddy auto-provisions a Let's Encrypt cert for SITE_ADDRESS and reverse-proxies
+#  to the app; MySQL and uploads persist in named volumes (named volumes inherit the
+#  image's www-data ownership, avoiding the bind-mount permission pitfall). Secrets
+#  are REQUIRED — an unset value fails the command instead of using a guessable default.
 #
-# Provide secrets via a .env file next to this one (see .env.example):
-#     DB_USER=...  DB_PASS=...  MYSQL_ROOT_PASSWORD=...
+#  Run on any Docker host (a small 2 vCPU / 4 GB VPS is recommended for honest load
+#  numbers — see docs/staging-deployment.md):
+#
+#    cp .env.example .env                       # set DB_PASS, MYSQL_ROOT_PASSWORD, SITE_ADDRESS
+#    cp deploy/seed.sql.example deploy/seed.sql # schema-only bootstrap (no default admin)
+#    docker compose -f docker-compose.staging.yml up -d --build
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
-  web:
-    build: .
-    image: lms_web:prod
-    container_name: lms_web
+  caddy:
+    image: caddy:2-alpine
+    container_name: lms_caddy
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:80"     # loopback only — front this with TLS (proxy/tunnel)
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env (your domain, or <vps-public-ip>.sslip.io)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+  web:
+    build: .
+    image: lms_web:staging
+    container_name: lms_web
+    restart: unless-stopped
+    expose:
+      - "80"                         # internal only — Caddy terminates TLS in front
     environment:
       DB_HOST: db
       DB_NAME: ${DB_NAME:-library_sys}
       DB_USER: ${DB_USER:?set DB_USER in .env}
       DB_PASS: ${DB_PASS:?set DB_PASS in .env}
-      # Outbound email (registration verification codes). Optional here —
-      # may instead be configured in-app: Settings → Notifications → Email (SMTP).
-      # Env values, when set, override the in-app settings.
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_SECURE: ${SMTP_SECURE:-tls}
@@ -39,7 +51,7 @@ services:
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-SDO Quirino Library}
     volumes:
-      - ./storage:/var/www/html/storage   # persist uploads/logs across rebuilds
+      - storage_data:/var/www/html/storage    # uploads, avatars, app logs (persisted)
     depends_on:
       db:
         condition: service_healthy
@@ -59,10 +71,9 @@ services:
       MYSQL_DATABASE: ${DB_NAME:-library_sys}
       MYSQL_USER: ${DB_USER:?set DB_USER in .env}
       MYSQL_PASSWORD: ${DB_PASS:?set DB_PASS in .env}
-    # No host port mapping in production — DB is internal to the compose network.
+    # No host port published — the DB is reachable only on the internal compose network.
     volumes:
       - db_data:/var/lib/mysql
-      # Seeds catalog/users on a FRESH database only; ignored once data exists.
       - ./deploy/seed.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
@@ -73,3 +84,6 @@ services:
 
 volumes:
   db_data:
+  storage_data:
+  caddy_data:
+  caddy_config:

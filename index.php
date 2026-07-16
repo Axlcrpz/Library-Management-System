@@ -33,7 +33,7 @@ $themeClass = 'ui-' . $uiTier;
 $navItems = [
     ['id' => 'dashboard',        'label' => 'Dashboard',        'icon' => 'fa-gauge',          'admin' => false, 'divider_before' => false],
     ['id' => 'documents',        'label' => 'Documents',         'icon' => 'fa-file-lines',     'admin' => false, 'divider_before' => false],
-    ['id' => 'books',            'label' => 'Inventory',         'icon' => 'fa-book',           'admin' => false, 'divider_before' => false],
+    ['id' => 'books',            'label' => $isStaff ? 'Inventory' : 'Search Books', 'icon' => $isStaff ? 'fa-magnifying-glass' : 'fa-magnifying-glass', 'admin' => false, 'divider_before' => false],
     ['id' => 'borrowing',        'label' => 'Borrowing',         'icon' => 'fa-hand-holding',   'admin' => false, 'divider_before' => true],
     ['id' => 'reservations',     'label' => 'Reservations',      'icon' => 'fa-bookmark',       'admin' => false, 'divider_before' => false],
     ['id' => 'members',          'label' => 'Members',           'icon' => 'fa-users',          'admin' => true,  'divider_before' => false],
@@ -331,7 +331,6 @@ $avFitClass = 'av-fit-' . $avType;
 <?php endif; ?>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <?php if ($isStaff): ?><script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script><?php endif; ?>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -343,9 +342,10 @@ if (typeof XLSX === 'undefined') {
     document.head.appendChild(xlsxFallback);
 }
 </script>
-<script src="assets/js/app.js?v=sdo-2026-v8"></script>
+<script src="assets/js/app.js?v=sdo-2026-v11"></script>
 <script src="assets/js/discovery.js?v=sdo-2026-v2"></script>
-<script src="assets/js/inventory.js?v=sdo-2026-v4"></script>
+<script src="assets/js/inventory.js?v=sdo-2026-v6"></script>
+<script src="assets/js/catalog.js?v=sdo-2026-v3"></script>
 
 <?php if ($uiTier === 'child'): ?>
 <script src="assets/js/gamification.js"></script>

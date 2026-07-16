@@ -271,12 +271,101 @@ function renderDashboard() {
     setText('stat-available', active.filter(doc => doc.status === 'available').length);
     setText('stat-borrowed', active.filter(doc => doc.status === 'borrowed').length);
     setText('stat-archived', documents.filter(doc => doc.archived).length);
-    renderChart('completionTrendChart', ['Available', 'Borrowed'],
-        [active.filter(doc => doc.status === 'available').length,
-         active.filter(doc => doc.status === 'borrowed').length], 'pie');
-    renderCategoryChart(active);
+    renderDocLibrary(active);
     loadDashboardActiveBorrows();
 }
+
+// ── Document Collection card — actionable breakdown by document type ──────────
+// Replaces the old Document Status / Document Types charts: every row is a real
+// category librarians file under (Memorandum, Circular, IRR, Manual, …), shows
+// how much of it is out on loan, and clicks through to the filtered Documents tab.
+const DOC_TYPE_ICONS = {
+    'memorandum':           'fa-file-signature',
+    'circular':             'fa-file-circle-exclamation',
+    'administrative order': 'fa-file-shield',
+    'irr':                  'fa-scale-balanced',
+    'policy':               'fa-landmark',
+    'guideline':            'fa-list-check',
+    'manual':               'fa-book-open',
+    'report':               'fa-chart-line',
+    'book':                 'fa-book',
+    'reference book':       'fa-book-bookmark',
+    'textbook':             'fa-book-open-reader',
+    'research paper':       'fa-flask',
+    'thesis':               'fa-graduation-cap',
+    'journal':              'fa-newspaper',
+    'magazine':             'fa-newspaper',
+};
+
+function renderDocLibrary(activeDocs) {
+    const list = byId('doclib-list');
+    if (!list) return;
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    const summaryEl = byId('doclib-summary');
+    if (summaryEl) {
+        const borrowed = activeDocs.filter(d => d.status === 'borrowed').length;
+        summaryEl.textContent = `${activeDocs.length} documents · ${borrowed} on loan (${currentYear})`;
+    }
+
+    if (!activeDocs.length) {
+        list.innerHTML = `<div class="text-center text-muted py-4" style="font-size:.8rem;">
+            <i class="fas fa-folder-open me-1"></i> No documents for ${currentYear} yet.
+            ${window.isAdmin ? '<div class="mt-2"><button class="btn btn-sm btn-outline-primary" onclick="switchTabById(\'documents\');setTimeout(()=>document.querySelector(\'.btn-open-add\')?.click(),300)"><i class="fas fa-plus me-1"></i>Add the first document</button></div>' : ''}
+        </div>`;
+        return;
+    }
+
+    const groups = {};
+    activeDocs.forEach(d => {
+        const type = String(d.document_type || 'Uncategorized').trim() || 'Uncategorized';
+        (groups[type] ??= { type, total: 0, borrowed: 0 });
+        groups[type].total++;
+        if (d.status === 'borrowed') groups[type].borrowed++;
+    });
+    const rows = Object.values(groups).sort((a, b) => b.total - a.total);
+
+    list.innerHTML = rows.map(g => {
+        const icon = DOC_TYPE_ICONS[g.type.toLowerCase()] || 'fa-file-lines';
+        const available = g.total - g.borrowed;
+        const pct = g.total ? Math.round((available / g.total) * 100) : 0;
+        const barCol = pct >= 60 ? 'var(--success,#10b981)' : (pct > 0 ? 'var(--warning,#f59e0b)' : 'var(--danger,#ef4444)');
+        return `<div role="button" tabindex="0" onclick="docLibGoto('${esc(g.type).replace(/'/g, "\\'")}')"
+             onkeydown="if(event.key==='Enter')docLibGoto('${esc(g.type).replace(/'/g, "\\'")}')"
+             style="display:flex;align-items:center;gap:13px;padding:10px 18px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s;"
+             onmouseover="this.style.background='var(--bg,#f8fafc)'" onmouseout="this.style.background='transparent'">
+            <div style="width:34px;height:34px;border-radius:9px;background:var(--purple-light,#ede9fe);color:var(--purple,#7c3aed);display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0;">
+                <i class="fas ${icon}"></i>
+            </div>
+            <div style="min-width:120px;max-width:180px;">
+                <div style="font-weight:600;font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(g.type)}</div>
+                <div style="font-size:.68rem;color:var(--text-muted);">${g.total} document${g.total !== 1 ? 's' : ''}</div>
+            </div>
+            <div style="flex:1;min-width:40px;height:6px;border-radius:99px;background:var(--border,#eef1f5);overflow:hidden;">
+                <div style="width:${pct}%;height:100%;background:${barCol};border-radius:99px;"></div>
+            </div>
+            <div style="font-size:.74rem;color:var(--text-muted);white-space:nowrap;font-variant-numeric:tabular-nums;">
+                <b style="color:var(--text);">${available}</b> in · ${g.borrowed} out
+            </div>
+            <i class="fas fa-chevron-right" style="color:#cbd5e1;font-size:.66rem;"></i>
+        </div>`;
+    }).join('');
+}
+
+// Open the Documents tab pre-filtered to one document type
+function docLibGoto(type) {
+    switchTabById('documents');
+    setTimeout(() => {
+        const search = byId('search-input-documents');
+        if (search) {
+            search.dataset.unlocked = '1';
+            search.removeAttribute('readonly');
+            search.value = type === 'Uncategorized' ? '' : type;
+        }
+        renderTable();
+    }, 250);
+}
+window.docLibGoto = docLibGoto;
 
 async function loadDashboardActiveBorrows() {
     if (window.isAdmin) {
@@ -346,27 +435,6 @@ async function loadDashboardActiveBorrows() {
 function setText(id, value) {
     const element = byId(id);
     if (element) element.textContent = value;
-}
-
-function renderChart(canvasId, labels, data, type) {
-    const canvas = byId(canvasId);
-    if (!canvas || typeof Chart === 'undefined') return;
-    const key = `${canvasId}Instance`;
-    if (window[key]) window[key].destroy();
-    window[key] = new Chart(canvas.getContext('2d'), {
-        type,
-        data: { labels, datasets: [{ data }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
-    });
-}
-
-function renderCategoryChart(items) {
-    const counts = items.reduce((map, doc) => {
-        const type = doc.document_type || 'Uncategorized';
-        map[type] = (map[type] || 0) + 1;
-        return map;
-    }, {});
-    renderChart('categorySummaryChart', Object.keys(counts), Object.values(counts), 'doughnut');
 }
 
 function filteredDocuments() {
@@ -915,115 +983,12 @@ async function loadBooks() {
     if (!body.success) return;
     allBooks = body.data || [];
     window.allBooks = allBooks;            // shared with the inventory module
-    renderBooksTable();
-    populateSubjectFilter();
-    renderBooksMainTable();
-    populateSubjectFilterMain();
     if (typeof renderInventory === 'function') renderInventory();
 }
 
-function populateSubjectFilter() {
-    const select = document.getElementById('book-subject-filter');
-    if (!select) return;
-    const subjects = [...new Set(allBooks.map(b => b.subject).filter(Boolean))].sort();
-    select.innerHTML = '<option value="">All Subjects</option>' +
-        subjects.map(s => `<option value="${s}">${s}</option>`).join('');
-}
-
-function filterBooksTable() { renderBooksTable(); }
-function filterBooksMainTable() { renderBooksMainTable(); }
-
-function renderBooksTable() {
-    const tbody = document.getElementById('books-table-dashboard');
-    if (!tbody) return;
-
-    const search = (document.getElementById('book-search-dashboard')?.value || '').toLowerCase().trim();
-    const subject = document.getElementById('book-subject-filter')?.value || '';
-
-    let items = [...allBooks];
-    if (search) items = items.filter(b => [b.title, b.author, b.subject, b.grade_level, b.location_label].some(v => String(v || '').toLowerCase().includes(search)));
-    if (subject) items = items.filter(b => b.subject === subject);
-
-    const cols = window.isStaff ? 7 : 6;
-    if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="${cols}" class="text-center text-muted py-5" style="font-size:.82rem;"><i class="fas fa-book-open me-2"></i>No books found.</td></tr>`;
-        return;
-    }
-
-    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-    tbody.innerHTML = items.map(b => {
-        const condBadge = { good: '<span class="badge badge-good">Good</span>', fair: '<span class="badge badge-fair">Fair</span>', poor: '<span class="badge badge-poor">Poor</span>' }[b.condition_status] || '<span class="badge badge-cancelled">—</span>';
-        const availColor = b.quantity_available === 0 ? 'var(--danger)' : (b.quantity_available < 10 ? 'var(--warning)' : 'var(--success)');
-        const staffActions = window.isStaff ? `<td class="action-buttons">
-            <button class="btn btn-sm btn-outline-secondary" onclick="openEditBookModal(${b.id})" title="Edit"><i class="fas fa-pen"></i></button>
-            <button class="btn btn-sm btn-outline-danger" onclick="deleteBook(${b.id})" title="Delete"><i class="fas fa-trash"></i></button>
-        </td>` : '';
-        return `<tr>
-            <td>
-                <div style="font-weight:600;font-size:.82rem;">${esc(b.title)}</div>
-                ${b.author ? `<div style="font-size:.72rem;color:var(--text-muted);">${esc(b.author)}</div>` : ''}
-            </td>
-            <td>${esc(b.subject || '—')}</td>
-            <td>${esc(b.grade_level || '—')}</td>
-            <td>${b.location_label ? `<span style="background:var(--primary-light);color:var(--primary);padding:2px 8px;border-radius:99px;font-size:.7rem;font-weight:600;"><i class="fas fa-location-dot me-1"></i>${esc(b.location_label)}</span>` : '<span style="color:var(--text-light);">—</span>'}</td>
-            <td><span style="font-weight:700;color:${availColor};">${b.quantity_available}</span><span style="color:var(--text-muted);font-size:.75rem;"> / ${b.quantity_total}</span></td>
-            <td>${condBadge}</td>
-            ${staffActions}
-        </tr>`;
-    }).join('');
-}
-
-function populateSubjectFilterMain() {
-    const select = document.getElementById('book-subject-filter-main');
-    if (!select) return;
-    const subjects = [...new Set(allBooks.map(b => b.subject).filter(Boolean))].sort();
-    select.innerHTML = '<option value="">All Subjects</option>' +
-        subjects.map(s => `<option value="${s}">${s}</option>`).join('');
-}
-
-function renderBooksMainTable() {
-    const tbody = document.getElementById('books-table-main');
-    if (!tbody) return;
-
-    const search = (document.getElementById('book-search-main')?.value || '').toLowerCase().trim();
-    const subject = document.getElementById('book-subject-filter-main')?.value || '';
-
-    let items = [...allBooks];
-    if (search) items = items.filter(b => [b.title, b.author, b.subject, b.grade_level, b.location_label].some(v => String(v || '').toLowerCase().includes(search)));
-    if (subject) items = items.filter(b => b.subject === subject);
-
-    const cols = window.isStaff ? 9 : 8;
-    if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="${cols}" class="text-center text-muted py-5" style="font-size:.82rem;"><i class="fas fa-book-open me-2"></i>No books found.</td></tr>`;
-        return;
-    }
-
-    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    tbody.innerHTML = items.map(b => {
-        const condBadge = { good: '<span class="badge badge-good">Good</span>', fair: '<span class="badge badge-fair">Fair</span>', poor: '<span class="badge badge-poor">Poor</span>' }[b.condition_status] || '<span class="badge badge-cancelled">—</span>';
-        const availColor = b.quantity_available === 0 ? 'var(--danger)' : (b.quantity_available < 10 ? 'var(--warning)' : 'var(--success)');
-        const actions = window.isStaff ? `<td class="action-buttons">
-            <button class="btn btn-sm btn-outline-primary" onclick="openBookQrModal(${b.id})" title="QR Code"><i class="fas fa-qrcode"></i></button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="openEditBookModal(${b.id})" title="Edit"><i class="fas fa-pen"></i></button>
-            <button class="btn btn-sm btn-outline-danger" onclick="deleteBook(${b.id})" title="Delete"><i class="fas fa-trash"></i></button>
-        </td>` : '';
-        return `<tr>
-            <td>
-                <div style="font-weight:600;font-size:.82rem;">${esc(b.title)}</div>
-                ${b.author ? `<div style="font-size:.72rem;color:var(--text-muted);">${esc(b.author)}</div>` : ''}
-            </td>
-            <td>${esc(b.author || '—')}</td>
-            <td>${esc(b.subject || '—')}</td>
-            <td>${esc(b.grade_level || '—')}</td>
-            <td>${b.location_label ? `<span style="background:var(--primary-light);color:var(--primary);padding:2px 8px;border-radius:99px;font-size:.7rem;font-weight:600;"><i class="fas fa-location-dot me-1"></i>${esc(b.location_label)}</span>` : '<span style="color:var(--text-light);">—</span>'}</td>
-            <td><span style="font-weight:700;color:${availColor};">${b.quantity_available}</span></td>
-            <td><span style="color:var(--text-muted);font-size:.82rem;">${b.quantity_total}</span></td>
-            <td>${condBadge}</td>
-            ${actions}
-        </tr>`;
-    }).join('');
-}
+// The dashboard "Book Availability" table and the legacy books-table-main
+// renderers were removed in v1.1: Search Books (inventory.js) is the single
+// place users browse the catalog — the dashboard only links to it.
 
 function openAddBookModal() {
     document.getElementById('bookModalTitle').textContent = 'Add New Book';
@@ -1295,11 +1260,51 @@ async function loadBookBorrowRequests() {
     if (window.isStaff) {
         const pending = await fetch('api/library_handler.php?action=book_borrow_requests_get&scope=pending', { credentials: 'same-origin' })
             .then(r => r.json()).catch(() => ({ success: false }));
-        renderBookBorrowPending(pending.success ? (pending.data || []) : []);
+        pendingBorrowRows = pending.success ? (pending.data || []) : [];
+        renderBookBorrowPending(pendingBorrowRows);
     }
 
     renderBookBorrowRecords(bookBorrowRecords);
 }
+
+let pendingBorrowRows = [];
+
+// Detailed read-only view of one borrow request (items, dates, notes, fine)
+function viewBorrowRecord(id) {
+    const r = bookBorrowRecords.find(x => Number(x.id) === Number(id))
+           || pendingBorrowRows.find(x => Number(x.id) === Number(id));
+    const body = document.getElementById('borrowRecordBody');
+    const modalEl = document.getElementById('borrowRecordModal');
+    if (!r || !body || !modalEl) return;
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const overdue = isOverdue(r);
+    const items = (r.items || []).map(i => `
+        <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border,#eef1f5);">
+            <div>
+                <div style="font-weight:600;font-size:.83rem;">${esc(i.title || ('Book #' + i.book_id))}</div>
+                <div style="font-size:.72rem;color:var(--text-muted);">${esc([i.subject, i.grade_level].filter(Boolean).join(' · '))}</div>
+            </div>
+            <div style="font-size:.78rem;white-space:nowrap;">×${Number(i.quantity) || 1}${Number(i.returned_quantity) ? ` <span class="text-muted">(${i.returned_quantity} returned)</span>` : ''}</div>
+        </div>`).join('');
+    const row = (l, v) => v ? `<tr><td style="color:var(--text-muted);padding:3px 14px 3px 0;font-size:.76rem;white-space:nowrap;">${l}</td><td style="font-size:.8rem;">${v}</td></tr>` : '';
+    body.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div style="font-weight:700;font-size:.95rem;">Request #${r.id}</div>
+            <div>${statusBadge(r.status)}${overdue ? ' <span class="badge badge-overdue" style="font-size:.65rem;">Overdue</span>' : ''}</div>
+        </div>
+        <div style="margin-bottom:12px;">${items || '<span class="text-muted" style="font-size:.8rem;">No items.</span>'}</div>
+        <table><tbody>
+            ${row('Borrower', esc(r.borrower_name || '—'))}
+            ${row('Requested', formatDateTime(r.requested_at))}
+            ${row('Needed until', r.requested_due ? formatDateTime(r.requested_due) : '')}
+            ${row('Borrowed', r.borrowed_at ? formatDateTime(r.borrowed_at) : '')}
+            ${row('Due', r.due_at ? formatDateTime(r.due_at) : '')}
+            ${row('Returned', r.returned_at ? formatDateTime(r.returned_at) : '')}
+            ${row('Return notes', r.return_notes ? esc(r.return_notes) : '')}
+        </tbody></table>`;
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+window.viewBorrowRecord = viewBorrowRecord;
 
 function itemSummary(items) {
     if (!Array.isArray(items) || !items.length) return '-';
@@ -1352,6 +1357,7 @@ function renderBookBorrowPending(rows) {
             <td style="font-size:.78rem;color:var(--text-muted);">${itemSummary(r.items)}</td>
             <td style="font-size:.78rem;color:var(--text-muted);">${formatDateTime(r.requested_at)}</td>
             <td class="action-buttons">
+                <button class="btn btn-sm btn-outline-primary" onclick="viewBorrowRecord(${r.id})" title="View details"><i class="fas fa-eye"></i></button>
                 <button class="btn btn-sm btn-success" onclick="approveBookBorrow(${r.id})" title="Approve"><i class="fas fa-check"></i></button>
                 <button class="btn btn-sm btn-danger" onclick="rejectBookBorrow(${r.id})" title="Reject"><i class="fas fa-times"></i></button>
             </td>
@@ -1375,13 +1381,14 @@ function renderBookBorrowRecords(rows) {
         const dueCell = overdue
             ? `<span style="color:var(--danger);font-weight:700;">${formatDateTime(r.due_at)} <i class="fas fa-triangle-exclamation ms-1"></i></span>`
             : `<span style="color:var(--text-muted);font-size:.78rem;">${formatDateTime(r.due_at)}</span>`;
-        let action = '—';
+        const viewBtn = `<button class="btn btn-sm btn-outline-primary" onclick="viewBorrowRecord(${r.id})" title="View details"><i class="fas fa-eye"></i></button>`;
+        let action = viewBtn;
         if (r.status === 'pending') {
             action = window.isStaff
-                ? `<div class="action-buttons"><button class="btn btn-sm btn-success" onclick="approveBookBorrow(${r.id})" title="Approve"><i class="fas fa-check"></i></button><button class="btn btn-sm btn-danger" onclick="rejectBookBorrow(${r.id})" title="Reject"><i class="fas fa-times"></i></button></div>`
-                : `<button class="btn btn-sm btn-outline-danger" onclick="cancelBookBorrow(${r.id})">Cancel</button>`;
+                ? `<div class="action-buttons">${viewBtn}<button class="btn btn-sm btn-success" onclick="approveBookBorrow(${r.id})" title="Approve"><i class="fas fa-check"></i></button><button class="btn btn-sm btn-danger" onclick="rejectBookBorrow(${r.id})" title="Reject"><i class="fas fa-times"></i></button></div>`
+                : `<div class="action-buttons">${viewBtn}<button class="btn btn-sm btn-outline-danger" onclick="cancelBookBorrow(${r.id})">Cancel</button></div>`;
         } else if (r.status === 'borrowed' && window.isStaff) {
-            action = `<button class="btn btn-sm btn-success" onclick="openBookReturnModal(${r.id})"><i class="fas fa-rotate-left me-1"></i>Return</button>`;
+            action = `<div class="action-buttons">${viewBtn}<button class="btn btn-sm btn-success" onclick="openBookReturnModal(${r.id})"><i class="fas fa-rotate-left me-1"></i>Return</button></div>`;
         }
 
         return `<tr ${overdue ? 'style="background:rgba(220,38,38,.03);"' : ''}>
@@ -1442,32 +1449,7 @@ async function openBookReturnModal(id) {
     if (!form) return;
     document.getElementById('bookReturnBorrowId').value = record.id;
     form.querySelector('[name="return_notes"]').value = '';
-    form.querySelector('[name="fine_amount"]').value = '';
 
-    // Auto-calculate overdue fine
-    const fineAlert  = document.getElementById('bookReturnFineAlert');
-    const fineDetail = document.getElementById('bookReturnFineDetail');
-    const fineAmt    = document.getElementById('bookReturnFineAmt');
-    if (fineAlert) fineAlert.style.display = 'none';
-
-    if (record.due_at) {
-        const due = new Date(String(record.due_at).replace(' ', 'T'));
-        const now = new Date();
-        if (now > due) {
-            const overdueDays = Math.ceil((now - due) / 86400000);
-            try {
-                const res = await requestJson(`${API}?action=calculate_fine&id=${id}`);
-                if (res.success && (res.data?.fine_amount ?? 0) > 0) {
-                    const fine = Number(res.data.fine_amount);
-                    const finePerDay = res.data.rate_per_day ?? 5;
-                    if (fineAlert) fineAlert.style.display = 'flex';
-                    if (fineDetail) fineDetail.textContent = `${overdueDays} day(s) overdue × PHP ${finePerDay}/day`;
-                    if (fineAmt) fineAmt.textContent = `PHP ${fine.toFixed(2)}`;
-                    form.querySelector('[name="fine_amount"]').value = fine.toFixed(2);
-                }
-            } catch (_) { /* non-fatal */ }
-        }
-    }
     const tbody = document.getElementById('book-return-items-body');
     if (!tbody) return;
 
@@ -1861,8 +1843,6 @@ window.openAddDeliveryModal = openAddDeliveryModal;
 window.addDeliveryItemRow = addDeliveryItemRow;
 window.openAddAnnouncementModal = openAddAnnouncementModal;
 window.deleteAnnouncement = deleteAnnouncement;
-window.filterBooksTable = filterBooksTable;
-window.filterBooksMainTable = filterBooksMainTable;
 window.openBorrowRequestModal = openBorrowRequestModal;
 window.addBookBorrowItemRow = addBookBorrowItemRow;
 window.loadBookBorrowRequests = loadBookBorrowRequests;

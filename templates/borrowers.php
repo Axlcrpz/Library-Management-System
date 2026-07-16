@@ -41,11 +41,11 @@
         </div>
     </div>
     <div class="col-6 col-md-3">
-        <div class="stat-card stat-danger">
+        <div class="stat-card stat-info">
             <div style="display:flex;justify-content:space-between;align-items:start;">
-                <div><div class="stat-card-label">Total Fines</div>
-                    <div class="stat-card-value" id="bwr-stat-fines">—</div></div>
-                <div class="stat-card-icon"><i class="fas fa-peso-sign"></i></div>
+                <div><div class="stat-card-label">Online Accounts</div>
+                    <div class="stat-card-value" id="bwr-stat-linked">—</div></div>
+                <div class="stat-card-icon"><i class="fas fa-user-check"></i></div>
             </div>
         </div>
     </div>
@@ -90,12 +90,11 @@
                         <th style="font-size:.78rem;text-align:center;">Borrows</th>
                         <th style="font-size:.78rem;text-align:center;">Active</th>
                         <th style="font-size:.78rem;text-align:center;">Overdue</th>
-                        <th style="font-size:.78rem;text-align:right;">Fines</th>
                         <th style="font-size:.78rem;width:90px;">Action</th>
                     </tr>
                 </thead>
                 <tbody id="bwrTableBody">
-                    <tr><td colspan="8" class="text-center text-muted py-5" style="font-size:.82rem;">
+                    <tr><td colspan="7" class="text-center text-muted py-5" style="font-size:.82rem;">
                         <i class="fas fa-spinner fa-spin me-2"></i>Loading members…
                     </td></tr>
                 </tbody>
@@ -141,11 +140,10 @@
                                 <th>Due</th>
                                 <th>Returned</th>
                                 <th>Status</th>
-                                <th style="text-align:right;">Fine</th>
                             </tr>
                         </thead>
                         <tbody id="bwrHistoryBody">
-                            <tr><td colspan="6" class="text-center text-muted">No history yet.</td></tr>
+                            <tr><td colspan="5" class="text-center text-muted">No history yet.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -170,12 +168,12 @@ function updateBorrowerStats() {
     const total   = allBorrowers.length;
     const active  = allBorrowers.filter(b => Number(b.active_borrows) > 0).length;
     const overdue = allBorrowers.filter(b => Number(b.overdue_count)  > 0).length;
-    const fines   = allBorrowers.reduce((s, b) => s + parseFloat(b.total_fines || 0), 0);
+    const linked  = allBorrowers.filter(b => b.user_id).length;
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('bwr-stat-total',   total);
     set('bwr-stat-active',  active);
     set('bwr-stat-overdue', overdue);
-    set('bwr-stat-fines',   'PHP ' + fines.toFixed(2));
+    set('bwr-stat-linked',  linked);
 }
 
 function filterBorrowers() {
@@ -199,7 +197,7 @@ function renderBorrowerTable(rows) {
     const fmtDate = v => { if (!v) return '—'; const d = new Date(String(v).replace(' ','T')); return isNaN(d)?v:d.toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'2-digit'}); };
 
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-5" style="font-size:.82rem;"><i class="fas fa-users me-2"></i>No members found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-5" style="font-size:.82rem;"><i class="fas fa-users me-2"></i>No members found.</td></tr>';
         return;
     }
 
@@ -238,9 +236,6 @@ function renderBorrowerTable(rows) {
                     ? `<span style="background:var(--danger-light);color:var(--danger);padding:2px 8px;border-radius:99px;font-size:.68rem;font-weight:600;">${esc(b.overdue_count)} overdue</span>`
                     : '<span style="color:var(--text-muted);font-size:.75rem;">—</span>'}
             </td>
-            <td style="text-align:right;font-size:.78rem;font-weight:600;${parseFloat(b.total_fines||0)>0?'color:var(--danger);':'color:var(--text-muted);'}">
-                ${parseFloat(b.total_fines||0)>0 ? 'PHP '+parseFloat(b.total_fines).toFixed(2) : '—'}
-            </td>
             <td>
                 <button class="btn btn-sm btn-outline-primary" style="font-size:.7rem;padding:3px 9px;"
                         onclick="viewBorrowerProfile(${b.id})">
@@ -259,7 +254,7 @@ async function viewBorrowerProfile(id) {
 
     document.getElementById('bwrProfileName').textContent = 'Loading…';
     document.getElementById('bwrHistoryBody').innerHTML =
-        '<tr><td colspan="6" class="text-center text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Loading…</td></tr>';
+        '<tr><td colspan="5" class="text-center text-muted"><i class="fas fa-spinner fa-spin me-2"></i>Loading…</td></tr>';
 
     const body = await fetch(`api/library_handler.php?action=borrower_profile&id=${id}`, { credentials: 'same-origin' })
         .then(r => r.json()).catch(() => ({ success: false }));
@@ -290,7 +285,6 @@ async function viewBorrowerProfile(id) {
     const avatarSrc = borrower.user_id
         ? `api/library_handler.php?action=user_avatar&id=${encodeURIComponent(borrower.user_id)}`
         : (borrower.profile_image || '');
-    console.debug('[member-avatar]', { id: borrower.id, user_id: borrower.user_id ?? null, src: avatarSrc || '(initials)' });
     showInitials();                                   // baseline — never blank, even while the image loads
     if (avatarSrc) {
         const img = new Image();
@@ -328,11 +322,8 @@ async function viewBorrowerProfile(id) {
             <td style="${h.status==='borrowed'&&h.due_at&&new Date(h.due_at)<new Date()?'color:var(--danger);font-weight:700;':''}">${fmtDT(h.due_at)}</td>
             <td>${fmtDT(h.returned_at)}</td>
             <td>${statusBadge(h.status)}</td>
-            <td style="text-align:right;${parseFloat(h.fine_amount||0)>0?'color:var(--danger);font-weight:700;':'color:var(--text-muted);'}">
-                ${parseFloat(h.fine_amount||0)>0?'PHP '+parseFloat(h.fine_amount).toFixed(2):'—'}
-            </td>
         </tr>`).join('')
-        : '<tr><td colspan="6" class="text-center text-muted py-3" style="font-size:.8rem;">No borrow history found.</td></tr>';
+        : '<tr><td colspan="5" class="text-center text-muted py-3" style="font-size:.8rem;">No borrow history found.</td></tr>';
 }
 
 function closeBorrowerProfile() {

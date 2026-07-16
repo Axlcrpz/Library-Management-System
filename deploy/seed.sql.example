@@ -4,23 +4,20 @@
 -- The real deploy/seed.sql (a full production dump containing PII + password
 -- hashes + a live API key) is GITIGNORED and must NEVER be committed.
 --
--- This template seeds only the `users` table the application assumes already
--- exists; every other table is created automatically by ensureLibrarySchema()
--- on the first request. No admin account is shipped, by design.
+-- This template seeds the `users` table the application assumes already exists,
+-- plus ONE temporary bootstrap administrator so a fresh deployment can log in
+-- immediately (no manual hashing step). Every other table is created automatically
+-- by ensureLibrarySchema() on the first request. Copy this to deploy/seed.sql when
+-- building a release.
 --
--- FIRST-RUN SETUP
---   1.  cp deploy/seed.sql.example deploy/seed.sql
---   2.  Generate a bcrypt hash for your first admin (no plaintext anywhere):
---         docker compose exec web php -r "echo password_hash('YOUR_STRONG_PASSWORD', PASSWORD_DEFAULT), PHP_EOL;"
---   3.  Insert ONE admin row (replace the email and the hash):
---         INSERT INTO users (username, password, full_name, role, status, is_active)
---         VALUES ('admin@your-office.example', '<paste-hash-here>', 'Administrator', 'admin', 'approved', 1);
---   4.  Never commit deploy/seed.sql.
+-- ⚠ TEMPORARY ADMINISTRATOR — first-deployment convenience only.
+--   Username: SDO_Quirino    Password: SDOQ2026!
+--   The client must change BOTH from inside the LMS right after the first login
+--   (My Account → change password; Settings → Users → rename/replace this account).
 -- ============================================================================
 
-CREATE DATABASE IF NOT EXISTS `library_sys`
-  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-USE `library_sys`;
+-- (v1.1) CREATE DATABASE removed: docker-entrypoint seeds into ${DB_NAME}; pinning `library_sys` here broke DB_NAME overrides.
+-- (v1.1) USE removed for the same reason.
 
 CREATE TABLE IF NOT EXISTS `users` (
   `id`             INT AUTO_INCREMENT PRIMARY KEY,
@@ -40,4 +37,11 @@ CREATE TABLE IF NOT EXISTS `users` (
   `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- (No admin row shipped — create yours per FIRST-RUN SETUP above.)
+-- ── Temporary bootstrap administrator (idempotent) ───────────────────────────
+-- Created ONLY on a fresh database, and ONLY if the username does not already exist
+-- (INSERT IGNORE + the UNIQUE username key) — so it never duplicates the account and
+-- never overwrites a password the admin has already changed.
+-- The value below is a bcrypt hash of 'SDOQ2026!'; the app checks it with
+-- password_verify() (the same algorithm). Change the password after first login.
+INSERT IGNORE INTO `users` (username, password, full_name, role, status, is_active)
+VALUES ('SDO_Quirino', '$2y$10$RTBhKH4HCXUmJBQ29AVASOwaZCWkC9oMtqu2RjWph6awGoNtdcUPK', 'SDO Administrator', 'admin', 'approved', 1);

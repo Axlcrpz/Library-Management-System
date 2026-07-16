@@ -35,20 +35,42 @@ $firstName = htmlspecialchars(explode(' ', trim($userName))[0]);
         var h    = now.getHours();
         var g    = h < 12 ? 'Good morning' : (h < 18 ? 'Good afternoon' : 'Good evening');
         var name = <?= json_encode($firstName) ?>;
+
         var days   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
         var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-        var min  = String(now.getMinutes()).padStart(2,'0');
-        var sec  = String(now.getSeconds()).padStart(2,'0');
-        var hr   = String(h).padStart(2,'0');
+
         var gel  = document.getElementById('greeting-text');
         var del  = document.getElementById('greeting-date');
         var tel  = document.getElementById('clock-time');
         var dtel = document.getElementById('clock-date');
-        if (gel)  gel.textContent  = g + ', ' + name + '!';
-        if (del)  del.textContent  = "Here's what's happening today.";
-        if (tel)  tel.textContent  = hr + ':' + min + ':' + sec;
-        if (dtel) dtel.textContent = days[now.getDay()] + ', ' + months[now.getMonth()] + ' ' + now.getDate() + ', ' + now.getFullYear();
+
+        if (gel) {
+            gel.textContent = g + ', ' + name + '!';
+        }
+
+        if (del) {
+            del.textContent = "Here's what's happening today.";
+        }
+
+        // Display 12-hour format with AM/PM
+        if (tel) {
+            tel.textContent = now.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            });
+        }
+
+        if (dtel) {
+            dtel.textContent =
+                days[now.getDay()] + ', ' +
+                months[now.getMonth()] + ' ' +
+                now.getDate() + ', ' +
+                now.getFullYear();
+        }
     }
+
     updateGreeting();
     setInterval(updateGreeting, 1000);
 })();
@@ -178,36 +200,39 @@ $firstName = htmlspecialchars(explode(' ', trim($userName))[0]);
     <?php endforeach; ?>
 </div>
 
-<!-- Charts + Active Borrows -->
+<!-- Document collection breakdown + Active Borrows -->
 <div class="row g-3 mb-4">
-    <div class="col-lg-4">
+    <div class="col-lg-7">
         <div class="card h-100">
-            <div class="card-header">
-                <span style="font-weight:600;font-size:.85rem;">Document Status</span>
+            <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <span style="font-weight:700;font-size:.9rem;display:flex;align-items:center;gap:8px;">
+                    <i class="fas fa-folder-tree" style="color:var(--purple,#7c3aed);font-size:.85rem;"></i> Document Collection
+                </span>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span id="doclib-summary" style="font-size:.72rem;color:var(--text-muted);"></span>
+                    <button class="btn btn-sm btn-outline-primary" style="font-size:.72rem;padding:3px 10px;"
+                            onclick="switchTabById('documents')">
+                        <i class="fas fa-up-right-from-square me-1"></i> Open documents
+                    </button>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="chart-container" style="height:180px;"><canvas id="completionTrendChart"></canvas></div>
+            <div class="card-body p-0" style="overflow-y:auto;max-height:305px;">
+                <div id="doclib-list">
+                    <div class="text-center text-muted py-4" style="font-size:.8rem;">
+                        <i class="fas fa-spinner fa-spin me-1"></i> Loading...
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-lg-4">
-        <div class="card h-100">
-            <div class="card-header">
-                <span style="font-weight:600;font-size:.85rem;">Document Types</span>
-            </div>
-            <div class="card-body">
-                <div class="chart-container" style="height:180px;"><canvas id="categorySummaryChart"></canvas></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-lg-4">
+    <div class="col-lg-5">
         <div class="card h-100">
             <div class="card-header" style="justify-content:space-between;">
                 <span style="font-weight:600;font-size:.85rem;">Active Borrows</span>
                 <button class="btn btn-sm btn-outline-secondary" style="font-size:.72rem;padding:3px 8px;"
                         onclick="switchTabById('borrowing')">View all</button>
             </div>
-            <div class="card-body p-0" style="overflow-y:auto;max-height:220px;">
+            <div class="card-body p-0" style="overflow-y:auto;max-height:305px;">
                 <div id="dashboard-active-borrows">
                     <div class="text-center text-muted py-4" style="font-size:.8rem;">
                         <i class="fas fa-spinner fa-spin me-1"></i> Loading...
@@ -322,19 +347,20 @@ function renderCategoryList() {
 }
 
 // ── Navigate to Inventory tab, pre-filtered to the chosen category ────────────
+// (Targets the inventory module's live search box — the old subject <select>
+//  this pointed at no longer exists, so the filter silently never applied.)
 function bcatGoto(idx) {
     const cat = _bcatData[idx];
     const subject = cat ? (cat.subject || '') : '';
     switchTabById('books');
     setTimeout(() => {
-        const sel = document.getElementById('book-subject-filter-main');
-        if (sel) {
-            const hasOpt = [...sel.options].some(o => o.value === subject);
-            if (!hasOpt && subject) sel.add(new Option(subject, subject));
-            sel.value = subject;
+        const inv = document.getElementById('inv-search');
+        if (inv) {
+            inv.dataset.unlocked = '1';
+            inv.removeAttribute('readonly');
+            inv.value = subject === 'Uncategorized' ? '' : subject;
         }
-        if (typeof filterBooksMainTable === 'function') filterBooksMainTable();
-        else if (typeof renderBooksMainTable === 'function') renderBooksMainTable();
+        if (typeof invApplyFilters === 'function') invApplyFilters();
     }, 300);
 }
 
@@ -394,10 +420,10 @@ window.addEventListener('load', () => {
 <div class="row g-3 mb-4">
     <?php
     $userActions = [
-        ['label'=>'Search Books',    'icon'=>'fa-magnifying-glass','color'=>'var(--primary)', 'bg'=>'var(--primary-light)', 'onclick'=>"switchTabById('books')"],
-        ['label'=>'Borrow a Book',   'icon'=>'fa-hand-holding',    'color'=>'var(--success)', 'bg'=>'var(--success-light)', 'onclick'=>"switchTabById('borrowing');setTimeout(()=>openBorrowRequestModal(),300)"],
-        ['label'=>'My Transactions', 'icon'=>'fa-list-check',      'color'=>'var(--warning)', 'bg'=>'var(--warning-light)', 'onclick'=>"switchTabById('borrowing')"],
-        ['label'=>'View Inventory',  'icon'=>'fa-book-open',       'color'=>'var(--info)',    'bg'=>'var(--info-light)',    'onclick'=>"switchTabById('books')"],
+        ['label'=>'Book Inventory',    'icon'=>'fa-magnifying-glass','color'=>'var(--primary)', 'bg'=>'var(--primary-light)', 'onclick'=>"switchTabById('books')"],
+        ['label'=>'My Borrowed Book/s','icon'=>'fa-list-check',     'color'=>'var(--success)', 'bg'=>'var(--success-light)', 'onclick'=>"switchTabById('borrowing')"],
+        ['label'=>'My Reservation/s', 'icon'=>'fa-bookmark',        'color'=>'var(--warning)', 'bg'=>'var(--warning-light)', 'onclick'=>"switchTabById('reservations')"],
+        ['label'=>'My Account',      'icon'=>'fa-circle-user',     'color'=>'var(--info)',    'bg'=>'var(--info-light)',    'onclick'=>"switchTabById('my-account')"],
     ];
     foreach ($userActions as $qa): ?>
     <div class="col-6 col-md-3">
@@ -484,44 +510,6 @@ window.addEventListener('load', () => {
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-</div>
-
-<!-- Book availability -->
-<div class="card mb-2">
-    <div class="card-header">
-        <div style="display:flex;align-items:center;gap:8px;">
-            <i class="fas fa-book" style="color:var(--success);"></i>
-            <span style="font-weight:600;font-size:.85rem;">Book Availability</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <div class="input-group input-group-sm" style="width:190px;">
-                <span class="input-group-text"><i class="fas fa-search" style="font-size:.68rem;"></i></span>
-                <input type="text" class="form-control" id="book-search-dashboard"
-                       placeholder="Search..." oninput="filterBooksTable()">
-            </div>
-            <select id="book-subject-filter" class="form-select form-select-sm"
-                    style="width:auto;" onchange="filterBooksTable()">
-                <option value="">All Subjects</option>
-            </select>
-        </div>
-    </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover mb-0">
-                <thead>
-                    <tr>
-                        <th>Title</th><th>Subject</th><th>Grade</th>
-                        <th>Location</th><th>Available</th><th>Condition</th>
-                    </tr>
-                </thead>
-                <tbody id="books-table-dashboard">
-                    <tr><td colspan="6" class="text-center text-muted py-4" style="font-size:.82rem;">
-                        <i class="fas fa-spinner fa-spin me-2"></i> Loading...
-                    </td></tr>
-                </tbody>
-            </table>
         </div>
     </div>
 </div>

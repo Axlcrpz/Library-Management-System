@@ -75,33 +75,19 @@
                 </div>
             </div>
 
-            <div class="stab-section-title">Loan &amp; Fine Policy</div>
+            <div class="stab-section-title">Loan Policy</div>
             <div class="row g-3 mb-4">
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md-4">
                     <label class="form-label fw-semibold" style="font-size:.78rem;">Default Loan Period (days)</label>
                     <input type="number" class="form-control form-control-sm" id="setting-max_borrow_days" min="1" max="365">
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md-4">
                     <label class="form-label fw-semibold" style="font-size:.78rem;">Max Books Per Borrow</label>
                     <input type="number" class="form-control form-control-sm" id="setting-max_books_per_borrow" min="1" max="50">
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md-4">
                     <label class="form-label fw-semibold" style="font-size:.78rem;">Reservation Expiry (days)</label>
                     <input type="number" class="form-control form-control-sm" id="setting-reservation_expiry_days" min="1" max="30">
-                </div>
-                <div class="col-6 col-md-3">
-                    <label class="form-label fw-semibold" style="font-size:.78rem;">Default Fine/Day (₱)</label>
-                    <input type="number" class="form-control form-control-sm" id="setting-fine_per_day" min="0" step="0.5">
-                </div>
-                <div class="col-12">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="setting-auto_fine_enabled-cb"
-                               onchange="document.getElementById('setting-auto_fine_enabled').value=this.checked?'1':'0'">
-                        <label class="form-check-label" for="setting-auto_fine_enabled-cb" style="font-size:.82rem;">
-                            Auto-calculate fines when returning overdue books
-                        </label>
-                        <input type="hidden" id="setting-auto_fine_enabled" value="1">
-                    </div>
                 </div>
             </div>
             <div class="d-flex justify-content-end">
@@ -115,7 +101,7 @@
         <div id="stab-policies" class="stab-pane" style="display:none;">
             <div class="stab-section-title">Per-Classification Borrowing Rules</div>
             <p class="text-muted mb-3" style="font-size:.79rem;">
-                These rules override the global defaults for each borrower type. Set a lower fine to 0 to waive it for a class.
+                These rules override the global defaults for each borrower type.
             </p>
             <div class="table-responsive mb-3">
                 <table class="table table-sm table-bordered align-middle" style="font-size:.8rem;">
@@ -124,13 +110,11 @@
                             <th style="min-width:140px;">Classification</th>
                             <th>Loan Days</th>
                             <th>Max Books</th>
-                            <th>Fine/Day (₱)</th>
                             <th>Reservation Expiry</th>
-                            <th>Grace Period</th>
                         </tr>
                     </thead>
                     <tbody id="policies-tbody">
-                        <tr><td colspan="6" class="text-center text-muted py-3">
+                        <tr><td colspan="4" class="text-center text-muted py-3">
                             <i class="fas fa-spinner fa-spin me-2"></i>Loading policies…
                         </td></tr>
                     </tbody>
@@ -237,11 +221,63 @@
                     <div class="col-12 col-md-6">
                         <label class="form-label fw-semibold" style="font-size:.78rem;">Overdue Reminder Template</label>
                         <textarea class="form-control form-control-sm" id="setting-sms_overdue_message" rows="3"
-                                  placeholder='Dear {name}, your book "{book}" is overdue. Fine: PHP {fine}.'></textarea>
-                        <div class="form-text" style="font-size:.7rem;">Tokens: {name} {book} {fine}</div>
+                                  placeholder='Dear {name}, your book "{book}" is overdue. Please return it.'></textarea>
+                        <div class="form-text" style="font-size:.7rem;">Tokens: {name} {book}</div>
                     </div>
                 </div>
             </div>
+            <div class="stab-section-title">Email (SMTP)</div>
+            <p class="text-muted mb-3" style="font-size:.76rem;">
+                Used for registration verification codes. For Gmail: keep the defaults below, use the full Gmail
+                address as username, and generate an <strong>App Password</strong>
+                (Google Account &rarr; Security &rarr; 2-Step Verification &rarr; App passwords) — regular passwords are rejected.
+                Values set via <code>SMTP_*</code> environment variables override these fields.
+            </p>
+            <div class="row g-3 mb-3">
+                <div class="col-12 col-md-5">
+                    <label class="form-label fw-semibold" style="font-size:.78rem;">SMTP Host</label>
+                    <input type="text" class="form-control form-control-sm" id="setting-smtp_host" placeholder="smtp.gmail.com">
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label fw-semibold" style="font-size:.78rem;">Port</label>
+                    <input type="number" class="form-control form-control-sm" id="setting-smtp_port" placeholder="587">
+                </div>
+                <div class="col-6 col-md-4">
+                    <label class="form-label fw-semibold" style="font-size:.78rem;">Encryption</label>
+                    <select class="form-select form-select-sm" id="setting-smtp_secure">
+                        <option value="tls">STARTTLS (port 587)</option>
+                        <option value="ssl">SSL/TLS (port 465)</option>
+                    </select>
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label fw-semibold" style="font-size:.78rem;">Username (email address)</label>
+                    <input type="text" class="form-control form-control-sm" id="setting-smtp_user"
+                           placeholder="library@gmail.com" autocomplete="off">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label fw-semibold" style="font-size:.78rem;">App Password</label>
+                    <input type="password" class="form-control form-control-sm" id="setting-smtp_pass"
+                           placeholder="16-character Gmail App Password" autocomplete="new-password">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label fw-semibold" style="font-size:.78rem;">From Email <span class="fw-normal text-muted">(optional — defaults to username)</span></label>
+                    <input type="text" class="form-control form-control-sm" id="setting-smtp_from_email" placeholder="library@gmail.com">
+                </div>
+                <div class="col-12 col-md-6">
+                    <label class="form-label fw-semibold" style="font-size:.78rem;">From Name</label>
+                    <input type="text" class="form-control form-control-sm" id="setting-smtp_from_name" placeholder="SDO Quirino Library">
+                </div>
+            </div>
+            <div class="d-flex gap-2 align-items-center flex-wrap mb-4">
+                <div class="input-group input-group-sm" style="max-width:300px;">
+                    <input type="email" class="form-control" id="smtp-test-email" placeholder="Send a test to…">
+                    <button class="btn btn-outline-primary" id="smtp-test-btn" onclick="sendTestEmail()">
+                        <i class="fas fa-paper-plane me-1"></i>Send Test
+                    </button>
+                </div>
+                <span class="text-muted" style="font-size:.72rem;">Save the settings first, then send a test.</span>
+            </div>
+
             <div class="d-flex justify-content-end">
                 <button class="btn btn-primary btn-sm" onclick="saveNotificationSettings()">
                     <i class="fas fa-floppy-disk me-2"></i>Save Notification Settings
@@ -428,12 +464,27 @@ function switchSettingsTab(id) {
 const GENERAL_KEYS = [
     'library_name','library_address','library_contact','library_email',
     'max_borrow_days','max_books_per_borrow','reservation_expiry_days',
-    'fine_per_day','auto_fine_enabled',
 ];
 const NOTIF_KEYS = [
     'notify_borrow','notify_overdue',
     'sms_enabled','sms_api_key','sms_sender_name','sms_borrow_message','sms_overdue_message',
+    'smtp_host','smtp_port','smtp_secure','smtp_user','smtp_pass','smtp_from_email','smtp_from_name',
 ];
+
+async function sendTestEmail() {
+    const to  = document.getElementById('smtp-test-email')?.value.trim();
+    const btn = document.getElementById('smtp-test-btn');
+    if (!to) { settingsToast({ success: false, message: 'Enter an email address to send the test to.' }); return; }
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Sending…'; }
+    const res = await fetch('api/library_handler.php', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrf },
+        body: new URLSearchParams({ action: 'email_test', email: to }),
+    }).then(r => r.json()).catch(() => ({ success: false, message: 'Network error.' }));
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-paper-plane me-1"></i>Send Test'; }
+    settingsToast(res);
+}
 
 async function loadSettings() {
     const res = await fetch('api/library_handler.php?action=settings_get', { credentials: 'same-origin' })
@@ -517,9 +568,7 @@ async function loadPolicies() {
         <td class="fw-semibold">${c.label}</td>
         <td>${inp(c.id,'max_borrow_days',14)}</td>
         <td>${inp(c.id,'max_books_per_borrow',5)}</td>
-        <td>${inp(c.id,'fine_per_day',5,'0.5')}</td>
         <td>${inp(c.id,'reservation_expiry_days',3)}</td>
-        <td>${inp(c.id,'grace_period_days',0)}</td>
     </tr>`).join('');
 }
 

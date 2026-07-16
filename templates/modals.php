@@ -1,5 +1,13 @@
 <?php
-$types = ['Book', 'Reference Book', 'Textbook', 'Research Paper', 'Thesis', 'Journal', 'Magazine', 'Manual', 'Report', 'Memorandum', 'Other'];
+// Government document categories first (per client), then library material types.
+// Values already stored on existing rows (Book, Manual, Memorandum, …) all remain
+// in the list so the Edit form keeps matching legacy data.
+$types = [
+    'Memorandum', 'Circular', 'Administrative Order', 'IRR', 'Policy', 'Guideline',
+    'Manual', 'Report',
+    'Book', 'Reference Book', 'Textbook', 'Research Paper', 'Thesis', 'Journal', 'Magazine',
+    'Other',
+];
 ?>
 
 <div class="modal fade" id="addDocumentModal" tabindex="-1" aria-hidden="true">
@@ -901,24 +909,10 @@ $types = ['Book', 'Reference Book', 'Textbook', 'Research Paper', 'Thesis', 'Jou
                 <form id="book-return-form">
                     <input type="hidden" name="id" id="bookReturnBorrowId">
 
-                    <!-- Auto-fine banner (populated by JS) -->
-                    <div id="bookReturnFineAlert" style="display:none;background:rgba(220,38,38,.07);border:1px solid rgba(220,38,38,.25);border-radius:10px;padding:10px 14px;margin-bottom:12px;display:none;align-items:center;gap:10px;">
-                        <i class="fas fa-circle-exclamation" style="color:var(--danger);font-size:1rem;flex-shrink:0;"></i>
-                        <div style="flex:1;">
-                            <div style="font-weight:700;font-size:.82rem;color:var(--danger);">Overdue — Auto-calculated Fine</div>
-                            <div id="bookReturnFineDetail" style="font-size:.78rem;color:var(--text-muted);margin-top:2px;"></div>
-                        </div>
-                        <div style="font-size:1.2rem;font-weight:800;color:var(--danger);" id="bookReturnFineAmt"></div>
-                    </div>
-
                     <div class="row g-2 mb-3">
-                        <div class="col-md-6">
+                        <div class="col-md-9">
                             <label class="form-label fw-semibold">Return Notes</label>
                             <input type="text" class="form-control form-control-sm" name="return_notes">
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-semibold">Fine Amount (PHP)</label>
-                            <input type="number" class="form-control form-control-sm" name="fine_amount" min="0" step="0.01" placeholder="0.00">
                         </div>
                     </div>
 
@@ -1519,15 +1513,21 @@ window.printBookQr      = printBookQr;
           <div style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;margin-bottom:10px;">Attach New Document</div>
           <div class="row g-2">
             <div class="col-md-5">
-              <label class="form-label fw-semibold small mb-1">Label / Description</label>
-              <input type="text" id="ddoc-label" class="form-control form-control-sm"
-                     placeholder="e.g. Purchase Order, Delivery Receipt">
+              <label class="form-label fw-semibold small mb-1">Document Type</label>
+              <select id="ddoc-label" class="form-select form-select-sm">
+                <option value="Delivery Receipt (DR)">Delivery Receipt (DR)</option>
+                <option value="Purchase Order">Purchase Order</option>
+                <option value="Inventory List">Inventory List</option>
+                <option value="Packing List">Packing List</option>
+                <option value="Memorandum">Memorandum</option>
+                <option value="Other">Other</option>
+              </select>
             </div>
             <div class="col-md-7">
-              <label class="form-label fw-semibold small mb-1">File</label>
-              <input type="file" id="ddoc-file" class="form-control form-control-sm"
-                     accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.jpg,.jpeg,.png,.gif,.webp">
-              <div class="form-text">PDF, Excel, Word, Images · Max 20 MB</div>
+              <label class="form-label fw-semibold small mb-1">File(s)</label>
+              <input type="file" id="ddoc-file" class="form-control form-control-sm" multiple
+                     accept=".pdf,.xlsx,.xls,.csv,.docx,.doc,.jpg,.jpeg,.png,.gif,.webp,.zip">
+              <div class="form-text">PDF, Excel, Word, Images, ZIP · Max 20 MB each · multiple files allowed</div>
             </div>
           </div>
           <button class="btn btn-primary btn-sm mt-3" onclick="ddocUpload()">
@@ -1975,7 +1975,6 @@ window.openDeliveryDocs = function (deliveryId, label) {
   if (el) el.textContent = label ? ' — ' + label : '';
   document.getElementById('ddoc-list').innerHTML =
     '<div class="text-muted small"><i class="fas fa-spinner fa-spin me-1"></i>Loading…</div>';
-  document.getElementById('ddoc-label').value = '';
   bootstrap.Modal.getOrCreateInstance(document.getElementById('deliveryDocModal')).show();
   ddocLoadList();
 };
@@ -2021,27 +2020,33 @@ window.ddocDelete = function (id) {
   fd.append('action', 'delivery_delete_doc');
   fd.append('id', id);
   fetch('api/library_handler.php', { method:'POST', body:fd, credentials:'same-origin', headers:{'X-CSRF-Token': csrfToken()} })
-    .then(r => r.json()).then(b => { if (b.success) ddocLoadList(); else showToast(b.message||'Error','error'); });
+    .then(r => r.json()).then(b => {
+      if (b.success) {
+        ddocLoadList();
+        if (typeof window.dlvRefreshDetailDocs === 'function') window.dlvRefreshDetailDocs(_ddocDeliveryId);
+      } else showToast(b.message||'Error','error');
+    });
 };
 
 window.ddocUpload = function () {
   const fileInput = document.getElementById('ddoc-file');
   const label     = document.getElementById('ddoc-label').value.trim();
-  if (!fileInput.files[0]) { showToast('Please select a file.', 'error'); return; }
+  if (!fileInput.files.length) { showToast('Please select at least one file.', 'error'); return; }
 
   const fd = new FormData();
   fd.append('action', 'delivery_attach_doc');
   fd.append('delivery_id', _ddocDeliveryId);
   fd.append('label', label);
-  fd.append('files[]', fileInput.files[0]);
+  [...fileInput.files].forEach(f => fd.append('files[]', f));
 
   fetch('api/library_handler.php', { method:'POST', body:fd, credentials:'same-origin', headers:{'X-CSRF-Token': csrfToken()} })
     .then(r => r.json()).then(b => {
       if (b.success) {
-        showToast('Document attached!');
+        showToast(b.message || 'Document attached!');
         fileInput.value = '';
-        document.getElementById('ddoc-label').value = '';
         ddocLoadList();
+        // Keep the open delivery-details panel in sync
+        if (typeof window.dlvRefreshDetailDocs === 'function') window.dlvRefreshDetailDocs(_ddocDeliveryId);
       } else {
         showToast(b.message || 'Upload failed.', 'error');
       }
