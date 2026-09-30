@@ -554,11 +554,10 @@ body{display:flex;min-height:100vh}
       <h1 class="btitle">Library Management<br><span class="ac">System</span></h1>
       <p class="bsub">An integrated digital library platform for managing books, documents, borrowing records, and library resources across SDO Quirino schools.</p>
       <div class="fpills">
-        <div class="fpill"><i class="fas fa-book"></i> Book Catalog</div>
         <div class="fpill"><i class="fas fa-hand-holding"></i> Borrowing</div>
-        <div class="fpill"><i class="fas fa-bookmark"></i> Reservations</div>
         <div class="fpill"><i class="fas fa-chart-bar"></i> Reports</div>
         <div class="fpill"><i class="fas fa-file-lines"></i> Documents</div>
+        <div class="fpill"><i class="fas fa-users"></i> User Management</div>
       </div>
       <div class="bfoot">Republic of the Philippines &nbsp;&middot;&nbsp; Department of Education &nbsp;&middot;&nbsp; <?= date('Y') ?></div>
     </div>
